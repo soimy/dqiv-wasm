@@ -14,12 +14,20 @@ jobs:
     # Pinned, not windows-latest: as of Oct 2026 that label resolves to
     # windows-2025-vs2026, which ships Visual Studio 2026 only, and the
     # windows-game preset hard-codes the "Visual Studio 17 2022" generator.
-    # windows-2025 still carries VS 2022 Enterprise with the native C++
-    # workload, so the preset works unmodified.
-    runs-on: windows-2025
+    # windows-2025 also resolves there now, so neither label can run the
+    # preset. windows-2022 is the label that still matches the generator
+    # name; if GitHub retires it, this job moves to the VS 2026 generator
+    # (or Ninja + MSVC).
+    runs-on: windows-2022
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Toolchain probe
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          & $vswhere -prerelease -products * -format json |
+            ConvertFrom-Json |
+            ForEach-Object { "$($_.installationName) | $($_.installationVersion) | $($_.installationPath)" }
       - name: Configure
         run: cmake --preset windows-game
       - name: Build
