@@ -29,8 +29,16 @@ GameWindow::GameWindow(bool hidden,bool mute):hidden_(hidden) {
     require(SDL_InitSubSystem(SDL_INIT_VIDEO|SDL_INIT_GAMEPAD));
     try {
         require(SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3));
+#ifdef __EMSCRIPTEN__
+        // WebGL2 is GLES 3.0, so the request has to say ES and 3.0. Asking for a
+        // desktop 3.3 core profile is what makes SDL fail to create a context in
+        // a browser - the version and profile are the whole difference.
+        require(SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,0));
+        require(SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_ES));
+#else
         require(SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,3));
         require(SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE));
+#endif
         require(SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,1));
         window_=SDL_CreateWindow("Dragon Quest IV",1280,720,
             SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE|SDL_WINDOW_HIGH_PIXEL_DENSITY|(hidden?SDL_WINDOW_HIDDEN:0));

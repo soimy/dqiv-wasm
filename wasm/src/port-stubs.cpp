@@ -53,22 +53,32 @@ void SaveStore::write(std::uint32_t offset, std::span<const std::uint8_t> source
 }
 
 // Single-threaded host: the original mutex/thread-queue entry points become no-ops.
+namespace pc {
+namespace {
+std::function<void()> idleHandler;   // what NitroThreads::setIdleHandler stores
+}
+}
 extern "C" {
 void OS_LockMutex(OSMutex*) {}
 void OS_UnlockMutex(OSMutex*) {}
-void OS_PauseThread(OSThreadQueue*) {}
+void OS_PauseThread(OSThreadQueue*) {
+    // This is the frame boundary on a single-threaded host. The game's own code
+    // calls it when it wants to wait for the next frame, so what the Windows build
+    // does on an idle thread happens here instead, and the threads the SDK creates
+    // get their turn at the same point. Nothing else needs to drive the loop.
+    if(pc::idleHandler) pc::idleHandler();
+    pc::runPortableThreads();
+}
 void OS_UnpauseThread(OSThreadQueue*) {}
 }
 
 namespace pc {
-struct ThreadRuntime {
-    std::function<void()> idle;
-};
+struct ThreadRuntime {};   // nothing to hold; the handler lives in idleHandler above
 NitroThreads::NitroThreads():impl_(std::make_unique<ThreadRuntime>()) {}
 NitroThreads::~NitroThreads() = default;
 void NitroThreads::checkErrors() {}
-void NitroThreads::setIdleHandler(std::function<void()> handler) { impl_->idle=std::move(handler); }
-void NitroThreads::runIdle() { if(impl_->idle) impl_->idle(); }
+void NitroThreads::setIdleHandler(std::function<void()> handler) { idleHandler=std::move(handler); }
+void NitroThreads::runIdle() { if(idleHandler) idleHandler(); }
 
 namespace {
 NitroIdentity* currentIdentity=nullptr;   // single-threaded host, so no thread_local
