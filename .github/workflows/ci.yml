@@ -65,3 +65,11 @@ jobs:
           echo "$out" | grep -q 'sizeof(DataObject)   = 0x10'
           echo "$out" | grep -q 'sizeof(UnkGameApplication) = 0xb4'
           echo "$out" | grep -q 'sizeof(OSThread)     = 0xc0'
+          # Byte order is the change most likely to be silently wrong, so the
+          # round trip is pinned to the exact values, not just to "ok".
+          echo "$out" | grep -q 'byte order         = 0x7f3a5c6e -> 0x7f6e5c3a -> 0x7f3a5c6e  ok'
+      - name: Check the shaders against both GLSL profiles
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools
+          python3 wasm/check-shaders.py

@@ -4,6 +4,7 @@
 #include "GlLoader.hpp"
 #include "GxTextures.hpp"
 #include "Profile.hpp"
+#include "PixelOrder.hpp"
 #include <algorithm>
 #include "Parallel.hpp"
 #include <cmath>
@@ -27,36 +28,22 @@ namespace {
 // isampler2D, gl_FragDepth, dynamic indexing of uniform arrays — is in GLSL ES
 // 3.00. Precision qualifiers are required in ES fragment shaders and legal to
 // state explicitly on desktop, so they ride along with the version line.
+// Integer samplers have no default precision in ES at all, so this states one -
+// composeFragment is the only shader that uses an isampler2D, and glslang
+// stopped it until the line was there.
 // gl_ClipDistance is the single exception, handled below.
 #ifdef __EMSCRIPTEN__
-#define DQIV_GLSL_HEADER "#version 300 es\nprecision highp float;\nprecision highp int;\n"
+#define DQIV_GLSL_HEADER "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp isampler2D;\n"
 #else
 #define DQIV_GLSL_HEADER "#version 330 core\n"
 #endif
-// The game's pixel convention is 0xAARRGGBB. Desktop GL accepts that memory
-// order directly through GL_BGRA; WebGL2 has no BGRA format for texture uploads
-// or readbacks, so on wasm the bytes are swizzled into RGBA order first. Both
-// paths end up with the same texture contents and the same channel shifts.
+// The upload format this backend accepts. The channel shifts and the swizzle
+// live in PixelOrder.hpp, so the layout probe can assert the round trip.
 #ifdef __EMSCRIPTEN__
-constexpr GLuint kUploadFormat=GL_RGBA;
-constexpr unsigned kShiftR=0,kShiftG=8,kShiftB=16;   // a readback gives 0xAABBGGRR
+constexpr GLuint kUploadFormat=GL_RGBA;   // WebGL2 has no BGRA format
 #else
-constexpr GLuint kUploadFormat=GL_BGRA;
-constexpr unsigned kShiftR=16,kShiftG=8,kShiftB=0;   // a readback gives 0xAARRGGBB
+constexpr GLuint kUploadFormat=GL_BGRA;   // desktop GL accepts 0xAARRGGBB directly
 #endif
-// Pixels in the game's convention, in the byte order this backend's GL accepts.
-// On desktop that is the order they are already in, so the pointer comes back
-// unchanged; on wasm the bytes are swizzled into a scratch buffer first.
-const std::uint32_t* uploadOrder(std::span<const std::uint32_t> pixels,std::vector<std::uint32_t>& scratch) {
-#ifdef __EMSCRIPTEN__
-    if(pixels.empty())return pixels.data();
-    scratch.assign(pixels.begin(),pixels.end());
-    for(auto& p:scratch) {const unsigned a=p>>24,r=(p>>16)&255,g=(p>>8)&255,b=p&255;p=(a<<24)|(b<<16)|(g<<8)|r;}
-    return scratch.data();
-#else
-    (void)scratch;return pixels.data();
-#endif
-}
 const char* sceneVertex=DQIV_GLSL_HEADER R"(
 layout(location=0) in vec4 aPosition;
 layout(location=1) in vec4 aColor;
