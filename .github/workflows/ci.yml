@@ -11,7 +11,12 @@ jobs:
   # M2 acceptance criterion "the Windows build is still 0 error" — nobody working
   # on a Mac has a Win32/MSVC toolchain, so the claim needs a machine that does.
   windows:
-    runs-on: windows-latest
+    # Pinned, not windows-latest: as of Oct 2026 that label resolves to
+    # windows-2025-vs2026, which ships Visual Studio 2026 only, and the
+    # windows-game preset hard-codes the "Visual Studio 17 2022" generator.
+    # windows-2025 still carries VS 2022 Enterprise with the native C++
+    # workload, so the preset works unmodified.
+    runs-on: windows-2025
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
