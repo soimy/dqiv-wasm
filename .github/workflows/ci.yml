@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # The upstream Windows build. This is the only place that can honestly hold the
+  # M2 acceptance criterion "the Windows build is still 0 error" — nobody working
+  # on a Mac has a Win32/MSVC toolchain, so the claim needs a machine that does.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset windows-game
+      - name: Build
+        run: cmake --build build32 --config Release
+
+  # The wasm32 cross-build, plus the two assertions the M1 spike was verified with.
+  # Emscripten is pinned to the release the port was verified against.
+  wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install emsdk
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          cd "$RUNNER_TEMP/emsdk"
+          ./emsdk install 4.0.13
+          ./emsdk activate 4.0.13
+      - name: Build
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          ./wasm/build.sh
+      - name: Check the decompiled game still runs
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          out=$(node wasm/build/dqiv_wasm_spike.js)
+          echo "$out"
+          echo "$out" | grep -q 'arrayToIndex(\[1,1,1,1\], value=3, max=4) = 3'
+      - name: Check the 32-bit layout assumptions still hold
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          out=$(node wasm/build/dqiv_layout_probe.js)
+          echo "$out"
+          echo "$out" | grep -q 'sizeof(void\*)        = 4'
+          echo "$out" | grep -q 'sizeof(DataObject)   = 0x10'
+          echo "$out" | grep -q 'sizeof(UnkGameApplication) = 0xb4'
+          echo "$out" | grep -q 'sizeof(OSThread)     = 0xc0'

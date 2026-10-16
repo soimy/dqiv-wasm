@@ -1,10 +1,10 @@
 # Cross-build for wasm32 (Emscripten).
 #
-# This is deliberately ADDITIVE: the upstream root CMakeLists.txt (Visual Studio
-# 2022 / Win32 / MSVC) is left untouched, so the Windows build keeps working and
-# merges from upstream stay trivial. The source lists below mirror the upstream
-# targets; when upstream adds or moves files, update them here as well. That
-# duplication is the first debt to pay off — see docs/porting/03-ROADMAP.md.
+# This is deliberately ADDITIVE: the upstream Visual Studio 2022 / Win32 / MSVC
+# build is left working, so merges from upstream stay trivial. Source lists are
+# shared with it through ../cmake/Sources.cmake, so a new upstream file is
+# registered once. What stays here is what genuinely differs: the compiler
+# flags, the SDL wiring, and the portable stand-in for the Windows-only files.
 #
 # What this build does NOT do yet (see docs/porting/02-FINDINGS.md):
 #   * no renderer: native/GameWindow.cpp, GpuRenderer.cpp, GlLoader.cpp,
@@ -22,6 +22,7 @@ cmake_minimum_required(VERSION 3.24)
 project(DQIV_WASM LANGUAGES C CXX)
 
 set(DQIV_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+include("${DQIV_ROOT}/cmake/Sources.cmake")
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "wasm32 must use 4-byte pointers, got ${CMAKE_SIZEOF_VOID_P}")
@@ -51,62 +52,14 @@ if(NOT EXISTS "${DQIV_STB_VORBIS}")
         "${DQIV_STB_VORBIS}"
         EXPECTED_HASH SHA256=4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636)
 endif()
-add_library(dqiv_vorbis STATIC ${DQIV_ROOT}/native/VorbisDecoder.c)
+dqiv_vorbis_sources(${DQIV_ROOT} DQIV_VORBIS)
+add_library(dqiv_vorbis STATIC ${DQIV_VORBIS})
 target_include_directories(dqiv_vorbis PRIVATE "${CMAKE_BINARY_DIR}/_deps/stb")
 
 # PC platform: memory, math, video, 3D, display, sound mixing, files, settings.
-# Same list as the upstream dqiv_core target.
-add_library(dqiv_core STATIC
-    ${DQIV_ROOT}/game/src/main/dss/Random.cpp
-    ${DQIV_ROOT}/game/src/main/dss/Utf8Iterator.cpp
-    ${DQIV_ROOT}/game/src/main/data/DataObject.cpp
-    ${DQIV_ROOT}/game/src/main/dss/Pad.cpp
-    ${DQIV_ROOT}/game/src/main/global/GlobalDQ4.cpp
-    ${DQIV_ROOT}/game/src/main/dss/DssFix.cpp
-    ${DQIV_ROOT}/game/src/main/dss/DssVector.cpp
-    ${DQIV_ROOT}/native/Entropy.cpp
-    ${DQIV_ROOT}/native/FixedMath.cpp
-    ${DQIV_ROOT}/native/NitroMath.cpp
-    ${DQIV_ROOT}/native/NitroMemory.cpp
-    ${DQIV_ROOT}/native/NitroAlgorithms.cpp
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/os/os_printf.c
-    ${DQIV_ROOT}/native/NitroOs.cpp
-    ${DQIV_ROOT}/native/GxGeometry.cpp
-    ${DQIV_ROOT}/native/GxTextures.cpp
-    ${DQIV_ROOT}/native/GxRasterizer.cpp
-    ${DQIV_ROOT}/native/NitroVideo.cpp
-    ${DQIV_ROOT}/native/Display.cpp
-    ${DQIV_ROOT}/native/HdPictures.cpp
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/gx.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/gx_vramcnt.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/gx_bgcnt.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/gx_load2d.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/gx_load3d.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/g2.c
-    ${DQIV_ROOT}/native/NitroGeometry.cpp
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/gx/g3_util.c
-    ${DQIV_ROOT}/native/SoundWave.cpp
-    ${DQIV_ROOT}/native/SoundMixer.cpp
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_atan.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_trig.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_mtx22.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_mtx33.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_mtx43.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_mtx44.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/fx/fx_vec.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/std/std_string.c
-    ${DQIV_ROOT}/native/Assets.cpp
-    ${DQIV_ROOT}/native/AssetPack.cpp
-    ${DQIV_ROOT}/native/GameInstall.cpp
-    ${DQIV_ROOT}/native/Archive.cpp
-    ${DQIV_ROOT}/native/Compression.cpp
-    ${DQIV_ROOT}/native/GameServices.cpp
-    ${DQIV_ROOT}/native/Input.cpp
-    ${DQIV_ROOT}/native/Texture.cpp
-    ${DQIV_ROOT}/native/DualScreen.cpp
-    ${DQIV_ROOT}/native/Settings.cpp
-    ${DQIV_ROOT}/native/MobileSound.cpp
-    ${DQIV_ROOT}/native/Profile.cpp)
+# Same list as the upstream dqiv_core target, minus the Windows-only SaveStore.
+dqiv_core_sources(${DQIV_ROOT} DQIV_CORE)
+add_library(dqiv_core STATIC ${DQIV_CORE})
 target_include_directories(dqiv_core PUBLIC
     ${DQIV_ROOT}/native ${DQIV_ROOT}/native/compat ${DQIV_ROOT}/game/include
     ${DQIV_ROOT}/game/libs/NitroSDK/include ${DQIV_ROOT}/game/libs/NitroSystem/include)
@@ -117,46 +70,28 @@ add_library(dqiv_audio STATIC ${DQIV_ROOT}/native/AudioOutput.cpp)
 target_link_libraries(dqiv_audio PUBLIC dqiv_core)
 
 # The original game (decompiled sources), each DS overlay in its own module.
-file(GLOB_RECURSE DQIV_GAME_SOURCES CONFIGURE_DEPENDS "${DQIV_ROOT}/game/src/*.cpp")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/ModulePadding_[^/]+\\.cpp$")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/main/main\\.cpp$")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/dss/(Random|Utf8Iterator|Pad|DssFix|DssVector|DssCore|UnkMemory)\\.cpp$")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/(DataObject|GlobalDQ4)\\.cpp$")
+dqiv_game_sources(${DQIV_ROOT} DQIV_GAME_SOURCES)
 list(LENGTH DQIV_GAME_SOURCES DQIV_GAME_COUNT)
 message(STATUS "decompiled game translation units: ${DQIV_GAME_COUNT}")
 add_library(dqiv_game STATIC EXCLUDE_FROM_ALL ${DQIV_GAME_SOURCES})
 target_link_libraries(dqiv_game PUBLIC dqiv_core)
 
-add_library(dqiv_platform STATIC
-    ${DQIV_ROOT}/native/NitroFilesystem.cpp
-    ${DQIV_ROOT}/native/NitroBackup.cpp
-    ${DQIV_ROOT}/native/NitroPower.cpp
-    ${DQIV_ROOT}/native/NitroOverlays.cpp
-    ${DQIV_ROOT}/native/NitroWireless.cpp
-    ${DQIV_ROOT}/native/DssRuntime.cpp
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/os/os_message.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/wm/wm_gameinfo.c)
+dqiv_platform_sources(${DQIV_ROOT} DQIV_PLATFORM)
+dqiv_portable_platform_sources(${DQIV_ROOT} DQIV_EXE_PLATFORM)
+add_library(dqiv_platform STATIC ${DQIV_PLATFORM} ${DQIV_EXE_PLATFORM})
 target_link_libraries(dqiv_platform PUBLIC dqiv_core)
 
-add_library(dqiv_sound STATIC
-    ${DQIV_ROOT}/native/NitroSound.cpp
-    ${DQIV_ROOT}/native/SoundVoices.cpp
-    ${DQIV_ROOT}/native/SoundSequence.cpp
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_main.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_interface.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_command.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_alarm.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_work.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_bank.c
-    ${DQIV_ROOT}/game/libs/NitroSDK/src/snd/snd_util.c)
-target_link_libraries(dqiv_sound PUBLIC dqiv_core)
+dqiv_sound_sources(${DQIV_ROOT} DQIV_SOUND)
+add_library(dqiv_sound STATIC ${DQIV_SOUND})
+target_link_libraries(dqiv_sound PUBLIC dqiv_platform)
 
-file(GLOB_RECURSE DQIV_NNS_SOURCES CONFIGURE_DEPENDS "${DQIV_ROOT}/game/libs/NitroSystem/src/*.c")
-add_library(dqiv_nitro_system STATIC EXCLUDE_FROM_ALL ${DQIV_NNS_SOURCES} ${DQIV_ROOT}/native/NitroModel.cpp)
+dqiv_nitro_system_sources(${DQIV_ROOT} DQIV_NNS_SOURCES)
+add_library(dqiv_nitro_system STATIC EXCLUDE_FROM_ALL ${DQIV_NNS_SOURCES})
 target_link_libraries(dqiv_nitro_system PUBLIC dqiv_core)
 
-# 4 Windows-only platform files, replaced by a small portable implementation.
-add_library(dqiv_portable STATIC src/port-stubs.cpp)
+# The Windows-only platform files, replaced by a small portable implementation.
+dqiv_portable_sources(${DQIV_ROOT} DQIV_PORTABLE)
+add_library(dqiv_portable STATIC ${DQIV_PORTABLE})
 target_link_libraries(dqiv_portable PUBLIC dqiv_core)
 
 # Proof that the whole decompiled game links into one wasm module: it runs a real

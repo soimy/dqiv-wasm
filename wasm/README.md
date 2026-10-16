@@ -14,7 +14,9 @@ node wasm/build/dqiv_layout_probe.js
 ```
 
 Verified with Emscripten 4.0.13 on macOS (Apple Silicon): 677 translation units,
-0 errors, ~7 MB `.wasm`.
+0 errors, 8.5 MB `.wasm` (Debug). Rebuilt from scratch on 2026-10-16 with the same
+result; `.github/workflows/ci.yml` runs this build on `ubuntu-latest` and asserts the
+spike prints `= 3` plus the four layout assertions below.
 
 ## What this builds
 
@@ -55,5 +57,9 @@ That is why `sizeof(void*) == 4`, `sizeof(DataObject) == 0x10` and
 * **Asset extraction is not wired up.** `native/PackMain.cpp` is portable, so the
   plan is to run it in the browser on the user's own ROM — no game data is ever
   shipped.
-* **The source lists in `CMakeLists.txt` duplicate the upstream targets.** Keep
-  them in sync; converging this is the first item in the roadmap.
+
+The source lists are **not** duplicated any more: `../cmake/Sources.cmake` is the
+single place where every target registers its files, and both the root
+`CMakeLists.txt` and this one reference it. What stays here is what genuinely
+differs — the compiler flags, the SDL wiring, and the portable stand-in for the
+three Windows-only platform files.

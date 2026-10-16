@@ -12,17 +12,35 @@
 
 **验收**：`./wasm/build.sh` 从零构建 0 报错；`node wasm/build/dqiv_wasm_spike.js` 打印出 `arrayToIndex(...) = 3`。
 
-## M2 收敛构建，消除源文件清单重复（0.5–1 天）
+## M2 ✅ 收敛构建，消除源文件清单重复（已完成）
 
-`wasm/CMakeLists.txt` 目前复制了上游的源文件清单（`dqiv_core` / `dqiv_game` / `dqiv_sound` / `dqiv_platform` / `dqiv_nitro_system`）。
-上游一改文件，这里就会漂移。
+`cmake/Sources.cmake` 现在是各目标源清单的**唯一登记处**，根 `CMakeLists.txt` 与
+`wasm/CMakeLists.txt` 都引用它。
 
-- [ ] 把各目标的源文件清单抽成共享的 cmake 片段（例如 `cmake/Sources.cmake` 里的函数/变量），
+- [x] 把各目标的源文件清单抽成共享的 cmake 片段（`cmake/Sources.cmake` 里的函数），
       根 `CMakeLists.txt` 与 `wasm/CMakeLists.txt` 同时引用
-- [ ] 保持上游 Windows 构建产物不变（用一次 `build.bat` 或 CI 验证；本机没有 Windows 时可只做配置层验证）
-- [ ] `native/DragonQuestIV.rc`、overlay 生成等 MSVC 专属部分必须能被非 MSVC 工具链安全跳过
+- [x] 保持上游 Windows 构建产物不变。本机没有 Windows，所以用"两个平台各配置一次、
+      逐条对比 HEAD 的清单"来验：**14/14 一致**。真正的 Windows 编译放进 CI 的
+      `windows-latest`，这条验收才有机器能守。
+- [x] `native/DragonQuestIV.rc`、overlay 生成等 MSVC 专属部分必须能被非 MSVC 工具链安全跳过：
+      `/WHOLEARCHIVE`、`/SECTION:.rdata,RW`、`/ENTRY`、`/DEBUG:FULL`、`/INCREMENTAL:NO` 已包进
+      `if(MSVC)`。`LANGUAGES RC` 和 `WIN32` 保留原样——根项目在 Apple Silicon 上连配置都完不成
+      （第 3 行的 32 位检查就是 fatal），所以这两处不构成实际障碍。
+
+四处真实差异是这样参数化的（这是 M2 的全部难点，其余是搬运）：
+
+| 位置 | 处理 |
+| --- | --- |
+| `native/SaveStore.cpp`（`dqiv_core`） | `if(WIN32)` 就地插入，位置不变，链接顺序不变 |
+| `native/NitroThreads.cpp` / `native/NitroIdentity.cpp`（`dqiv_platform`） | 同上，非 Windows 走 `dqiv_portable_sources()` 给的桩 |
+| `native/DssRuntime.cpp` | 独立函数 `dqiv_portable_platform_sources()`：上游把它放在 exe 目标里，wasm 把它编进 `dqiv_platform`，两边引用同一个函数 |
+| SDL | 目标名当参数（根用 `SDL3::SDL3`，wasm 用 `-sUSE_SDL=3`），不进共享文件 |
+
+顺带把 `dqiv_sound` 的链接目标统一成上游的 `dqiv_platform`（wasm 原先指向 `dqiv_core` 是历史遗留；
+桩已提供所需符号，`gameOverlayImages()` 只在 `GameBoot.cpp` 里被引用，所以不会引入新的未定义符号）。
 
 **验收**：新增一个上游文件后，只需要在一个地方登记；Windows 构建仍然 0 error。
+→ 前半条已成立；后半条由 `.github/workflows/ci.yml` 的 `windows-latest` 守住。
 
 ## M3 DS overlay 机制的可移植实现（3–5 天，需要设计）
 
@@ -49,6 +67,38 @@
 - [ ] 用 `wasm/build.sh` 产出 `index.html` + `.wasm` + `.data`，浏览器里能看到**标题画面**
 
 **验收**：浏览器里稳定 60 fps 显示标题/开场画面；`Settings > Display` 的分辨率与拉伸选项可用。
+
+## M4b [可选] WebGPU 后端（不排期，等 M4 验收过了再量）
+
+2026-10 的决定：**目标定为"只要浏览器"，所以 M4 走 WebGL2，WebGPU 不排期。**
+理由不是 WebGPU 不好，而是它在这个目标下**不增加触达，只增加工作量和体积**。
+
+实测的规模（`native/` 里 **281 个 `gl::` 调用点**、约 70 个入口点、8 个着色器）：
+
+| | WebGL2（M4） | WebGPU（M4b） |
+| --- | --- | --- |
+| 形态 | **移植**：只有 3 个缺口（见第 6 节） | **重写**：约 180 个状态机调用要变成 bind group / pipeline 描述符 |
+| 着色器 | `#version 300 es` + 精度限定符 | 8 个全部改写成 WGSL |
+| 覆盖率 | 基本全员 | 87.8%，且 **Firefox 全线 disabled-by-default** |
+| 体积 | — | `--use-port=emdawnwebgpu`（Dawn 的 `webgpu.h` 实现）给 7 MB 的 `.wasm` 再加几 MB |
+
+WebGPU 唯一的真甜头是原生跨平台——但那条路的门票是第 3 节的 263 个指针字段（M9），
+**不是 GPU API**。所以"上 WebGPU 就天然跨平台"是个错觉：它只让 GPU 层跨平台。
+
+两点值得记录，因为它们对 WebGPU **有利**、且已经付过成本：
+
+1. **回读路径已经是双缓冲异步的**（`GpuRenderer.cpp:1012` 起：`readPending_` + PBO +
+   `GL_STREAM_READ`，"这帧收上一帧排队的"）——正好是 WebGPU 的 copy-to-buffer + async map 模型。
+   WebGPU 最大的结构摩擦点，这里天然不存在。**M4 里别把它改成同步。**
+2. `glFinish` 只在 profiling 开着时走；`GL_(UN)PACK_ALIGNMENT` 只有 alignment，
+   WebGPU 的 `bytesPerRow` 能覆盖。
+
+M4 里顺手做的 4 个 hedge（成本几乎为零，让 M4b 不用返工）——把后端敏感的点显式化：
+回读（见上）、`gl_ClipDistance`（varying + 片元 `discard`，**WebGL2 和 WebGPU 都要这么写**，等于免费）、
+`BlitFramebuffer` 2 处、`glFinish` 1 处。这 4 处就是 M4 全部的"语义重写"面。
+
+**触发条件**：改主意要原生（macOS arm64 / iOS）；或者 WebGL2 撞上实际的性能/功能墙。
+注意没有缓存的话，这种"每帧改一堆状态"的负载在 WebGPU 上会比 WebGL2 **更慢**。
 
 ## M5 资源管线：浏览器内抽取（3–5 天）
 
@@ -108,5 +158,15 @@
 
 ## 建议顺序
 
-`M2 → M4 → M3 → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
+`M2(✅) → M4 → M3 → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
 M4 先行的理由：它是唯一"看得见进展"的里程碑，也能尽早暴露渲染相关的隐藏假设。
+M2 必须先做的理由：M4 会往两边清单里加文件（`GlLoader`/`GpuRenderer`/`GameWindow`/
+`FramePresenter`/`Display`/`TextCanvas`/`GameBoot` 这 7 个现在都还进不了 wasm 清单）。
+
+**2026-10 决定（已确认）**：目标定为**只要浏览器**。因此 GPU 走 **WebGL2**（M4 原样），
+WebGPU 降级为 M4b 不排期；M9/M10 归档——浏览器路线不用付 263 个指针字段的偏移化改造，
+而那是原生路线的真实门票，不是 GPU API。
+
+如果哪天改主意要原生，顺序变成 `M2(✅) → M9 的 263 字段审计（纯审计、不写代码、1–2 天）→ 定 GPU → …`：
+审计结果决定 M9 是 3 周还是 3 个月，而那时 WebGPU 反而是对的（它把 M9 里
+"GLES 3.0（已弃用）或新写 Metal"的二选一塌缩成一个后端）。

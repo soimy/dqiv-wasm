@@ -23,6 +23,11 @@
 
 还**没做**的：渲染层（WebGL2/GLES3 后端）、DS overlay 机制、资源管线。见路线图。
 
+**M2 已完成**（2026-10）：源清单不再重复——`cmake/Sources.cmake` 是唯一登记处，根
+`CMakeLists.txt` 和 `wasm/CMakeLists.txt` 都引用它。顺带加了双平台 CI（`windows-latest`
+真编译上游 Windows 构建，`ubuntu-latest` 跑本文件的快速开始那三条命令并断言输出）。
+目标定为**只要浏览器**，所以渲染层走 WebGL2，WebGPU 作为可选后端不排期（见路线图 M4b）。
+
 ## 快速开始
 
 ```bash

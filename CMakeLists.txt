@@ -24,6 +24,8 @@ FetchContent_Declare(SDL3
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(SDL3)
 
+include(cmake/Sources.cmake)
+
 # Ogg Vorbis decoder (public domain) for the smartphone version's music.
 set(DQIV_STB_VORBIS "${CMAKE_BINARY_DIR}/_deps/stb/stb_vorbis.c")
 if(NOT EXISTS "${DQIV_STB_VORBIS}")
@@ -31,65 +33,16 @@ if(NOT EXISTS "${DQIV_STB_VORBIS}")
         "${DQIV_STB_VORBIS}"
         EXPECTED_HASH SHA256=4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636)
 endif()
-add_library(dqiv_vorbis STATIC native/VorbisDecoder.c)
+dqiv_vorbis_sources(${CMAKE_SOURCE_DIR} DQIV_VORBIS)
+add_library(dqiv_vorbis STATIC ${DQIV_VORBIS})
 target_include_directories(dqiv_vorbis PRIVATE "${CMAKE_BINARY_DIR}/_deps/stb")
 if(MSVC)
     target_compile_options(dqiv_vorbis PRIVATE /W0)
 endif()
 
 # PC platform: memory, math, video, 3D, display, sound mixing, files, settings.
-add_library(dqiv_core STATIC
-    game/src/main/dss/Random.cpp
-    game/src/main/dss/Utf8Iterator.cpp
-    game/src/main/data/DataObject.cpp
-    game/src/main/dss/Pad.cpp
-    game/src/main/global/GlobalDQ4.cpp
-    game/src/main/dss/DssFix.cpp
-    game/src/main/dss/DssVector.cpp
-    native/Entropy.cpp
-    native/FixedMath.cpp
-    native/NitroMath.cpp
-    native/NitroMemory.cpp
-    native/NitroAlgorithms.cpp
-    game/libs/NitroSDK/src/os/os_printf.c
-    native/NitroOs.cpp
-    native/GxGeometry.cpp
-    native/GxTextures.cpp
-    native/GxRasterizer.cpp
-    native/NitroVideo.cpp
-    native/Display.cpp
-    native/HdPictures.cpp
-    game/libs/NitroSDK/src/gx/gx.c
-    game/libs/NitroSDK/src/gx/gx_vramcnt.c
-    game/libs/NitroSDK/src/gx/gx_bgcnt.c
-    game/libs/NitroSDK/src/gx/gx_load2d.c
-    game/libs/NitroSDK/src/gx/gx_load3d.c
-    game/libs/NitroSDK/src/gx/g2.c
-    native/NitroGeometry.cpp
-    game/libs/NitroSDK/src/gx/g3_util.c
-    native/SaveStore.cpp
-    native/SoundWave.cpp
-    native/SoundMixer.cpp
-    game/libs/NitroSDK/src/fx/fx_atan.c
-    game/libs/NitroSDK/src/fx/fx_trig.c
-    game/libs/NitroSDK/src/fx/fx_mtx22.c
-    game/libs/NitroSDK/src/fx/fx_mtx33.c
-    game/libs/NitroSDK/src/fx/fx_mtx43.c
-    game/libs/NitroSDK/src/fx/fx_mtx44.c
-    game/libs/NitroSDK/src/fx/fx_vec.c
-    game/libs/NitroSDK/src/std/std_string.c
-    native/Assets.cpp
-    native/AssetPack.cpp
-    native/GameInstall.cpp
-    native/Archive.cpp
-    native/Compression.cpp
-    native/GameServices.cpp
-    native/Input.cpp
-    native/Texture.cpp
-    native/DualScreen.cpp
-    native/Settings.cpp
-    native/MobileSound.cpp
-    native/Profile.cpp)
+dqiv_core_sources(${CMAKE_SOURCE_DIR} DQIV_CORE)
+add_library(dqiv_core STATIC ${DQIV_CORE})
 target_include_directories(dqiv_core PUBLIC native native/compat game/include game/libs/NitroSDK/include game/libs/NitroSystem/include)
 target_compile_definitions(dqiv_core PUBLIC DQIV_NATIVE=1)
 target_link_libraries(dqiv_core PUBLIC dqiv_vorbis)
@@ -102,34 +55,24 @@ target_link_libraries(dqiv_pack PRIVATE dqiv_core)
 
 # The original game (decompiled sources), each DS overlay in its own sections.
 include(cmake/NativeOverlays.cmake)
-file(GLOB_RECURSE DQIV_GAME_SOURCES CONFIGURE_DEPENDS "game/src/*.cpp")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/ModulePadding_[^/]+\\.cpp$")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/main/main\\.cpp$")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/dss/(Random|Utf8Iterator|Pad|DssFix|DssVector|DssCore|UnkMemory)\\.cpp$")
-list(FILTER DQIV_GAME_SOURCES EXCLUDE REGEX "/(DataObject|GlobalDQ4)\\.cpp$")
+dqiv_game_sources(${CMAKE_SOURCE_DIR} DQIV_GAME_SOURCES)
 add_library(dqiv_game STATIC EXCLUDE_FROM_ALL ${DQIV_GAME_SOURCES})
 target_link_libraries(dqiv_game PUBLIC dqiv_core)
-add_library(dqiv_platform STATIC native/NitroFilesystem.cpp native/NitroBackup.cpp native/NitroPower.cpp
-    native/NitroThreads.cpp native/NitroOverlays.cpp native/NitroIdentity.cpp native/NitroWireless.cpp game/libs/NitroSDK/src/os/os_message.c
-    game/libs/NitroSDK/src/wm/wm_gameinfo.c)
+dqiv_platform_sources(${CMAKE_SOURCE_DIR} DQIV_PLATFORM)
+add_library(dqiv_platform STATIC ${DQIV_PLATFORM})
 target_link_libraries(dqiv_platform PUBLIC dqiv_core)
-add_library(dqiv_sound STATIC native/NitroSound.cpp native/SoundVoices.cpp native/SoundSequence.cpp
-    game/libs/NitroSDK/src/snd/snd_main.c
-    game/libs/NitroSDK/src/snd/snd_interface.c
-    game/libs/NitroSDK/src/snd/snd_command.c
-    game/libs/NitroSDK/src/snd/snd_alarm.c
-    game/libs/NitroSDK/src/snd/snd_work.c
-    game/libs/NitroSDK/src/snd/snd_bank.c
-    game/libs/NitroSDK/src/snd/snd_util.c)
+dqiv_sound_sources(${CMAKE_SOURCE_DIR} DQIV_SOUND)
+add_library(dqiv_sound STATIC ${DQIV_SOUND})
 target_link_libraries(dqiv_sound PUBLIC dqiv_platform)
-file(GLOB_RECURSE DQIV_NNS_SOURCES CONFIGURE_DEPENDS "game/libs/NitroSystem/src/*.c")
-add_library(dqiv_nitro_system STATIC EXCLUDE_FROM_ALL ${DQIV_NNS_SOURCES} native/NitroModel.cpp)
+dqiv_nitro_system_sources(${CMAKE_SOURCE_DIR} DQIV_NNS_SOURCES)
+add_library(dqiv_nitro_system STATIC EXCLUDE_FROM_ALL ${DQIV_NNS_SOURCES})
 target_link_libraries(dqiv_nitro_system PUBLIC dqiv_core)
 
 # The game: a window without console; output and crash reports go to a
 # journal beside the save.
+dqiv_portable_platform_sources(${CMAKE_SOURCE_DIR} DQIV_EXE_PLATFORM)
 add_executable(DragonQuestIV WIN32 native/GameBoot.cpp native/GameWindow.cpp native/GpuRenderer.cpp native/GlLoader.cpp
-    native/TextCanvas.cpp native/InputBindings.cpp native/FramePresenter.cpp native/NitroSymbols.cpp native/DssRuntime.cpp
+    native/TextCanvas.cpp native/InputBindings.cpp native/FramePresenter.cpp native/NitroSymbols.cpp ${DQIV_EXE_PLATFORM}
     native/CrashHandler.cpp native/DragonQuestIV.rc)
 target_link_libraries(DragonQuestIV PRIVATE dqiv_game dqiv_nitro_system dqiv_sound dqiv_audio)
 set(overlay_ids "")
@@ -151,8 +94,11 @@ dqiv_overlay_registry(DragonQuestIV gameOverlayImages ${overlay_ids} 38)
 # currently linked scene refers to an individual global object by name.
 # The DS keeps read-only data in RAM and the game writes to some of it
 # (battle effect parameters, for one): constant data stays writable.
-target_link_options(DragonQuestIV PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:dqiv_game>" /SECTION:.rdata,RW
-    /ENTRY:mainCRTStartup /DEBUG:FULL /INCREMENTAL:NO)
+# All five flags are MSVC-only, so a non-MSVC toolchain skips them safely.
+if(MSVC)
+    target_link_options(DragonQuestIV PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:dqiv_game>" /SECTION:.rdata,RW
+        /ENTRY:mainCRTStartup /DEBUG:FULL /INCREMENTAL:NO)
+endif()
 
 if(MSVC)
     target_compile_options(dqiv_core PRIVATE /utf-8 /W4 /wd4068)
