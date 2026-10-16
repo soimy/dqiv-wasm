@@ -6,3 +6,6 @@
 /.vs/
 *.user
 /nexus-media/
+
+# Emscripten cross-build (wasm/)
+/wasm/build/
