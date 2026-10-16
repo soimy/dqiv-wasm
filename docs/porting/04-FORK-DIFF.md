@@ -33,7 +33,7 @@ Windows 侧的**行为**逐条验过：两个平台各配置一次、和 HEAD �
 | `cmake/Sources.cmake`（新增） | 各目标源清单的唯一登记处。Windows-only 文件（`SaveStore.cpp`、`NitroThreads.cpp`、`NitroIdentity.cpp`）在 `if(WIN32)` 里就地插入，位置不变；`dqiv_portable_sources()` 给出非 Windows 的桩；`dqiv_portable_platform_sources()` 给出上游放在 exe 目标里、但完全可移植的 `DssRuntime.cpp` |
 | `CMakeLists.txt` | 6 处源清单换成共享函数调用；`/WHOLEARCHIVE`、`/SECTION:.rdata,RW`、`/ENTRY`、`/DEBUG:FULL`、`/INCREMENTAL:NO` 包进 `if(MSVC)` |
 | `wasm/CMakeLists.txt` | 同上引用共享清单；`dqiv_sound` 的链接目标统一成上游的 `dqiv_platform`（原先指向 `dqiv_core` 是历史遗留） |
-| `.github/workflows/ci.yml`（新增） | `windows-latest` 真编译上游 Windows 构建（`windows-game` preset，Release）；`ubuntu-latest` 从零跑 `./wasm/build.sh` 并断言 spike 输出 `= 3` 与四条布局断言。Emscripten 钉在 4.0.13（spike 用的版本） |
+| `.github/workflows/ci.yml`（新增） | `windows-2022`（pin：`windows-latest` 和 `windows-2025` 现在都指向只装 VS 2026 的镜像，而 preset 硬编码 VS 2022 的 generator）真编译上游 Windows 构建（`windows-game` preset，Release）；`ubuntu-latest` 从零跑 `./wasm/build.sh` 并断言 spike 输出 `= 3` 与四条布局断言。Emscripten 钉在 4.0.13（spike 用的版本） |
 
 `dqiv_sound` 那处改动值得单独说明：`gameOverlayImages()` 只在 `GameBoot.cpp`（exe 目标）里被引用，
 `NitroOverlays.cpp` 不引用它，所以统一链接目标不会引入新的未定义符号。

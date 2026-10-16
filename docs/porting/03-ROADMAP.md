@@ -21,7 +21,7 @@
       根 `CMakeLists.txt` 与 `wasm/CMakeLists.txt` 同时引用
 - [x] 保持上游 Windows 构建产物不变。本机没有 Windows，所以用"两个平台各配置一次、
       逐条对比 HEAD 的清单"来验：**14/14 一致**。真正的 Windows 编译放进 CI 的
-      `windows-latest`，这条验收才有机器能守。
+      CI 的 `windows` job（runner pin 在 `windows-2022`），这条验收才有机器能守。
 - [x] `native/DragonQuestIV.rc`、overlay 生成等 MSVC 专属部分必须能被非 MSVC 工具链安全跳过：
       `/WHOLEARCHIVE`、`/SECTION:.rdata,RW`、`/ENTRY`、`/DEBUG:FULL`、`/INCREMENTAL:NO` 已包进
       `if(MSVC)`。`LANGUAGES RC` 和 `WIN32` 保留原样——根项目在 Apple Silicon 上连配置都完不成
@@ -40,7 +40,11 @@
 桩已提供所需符号，`gameOverlayImages()` 只在 `GameBoot.cpp` 里被引用，所以不会引入新的未定义符号）。
 
 **验收**：新增一个上游文件后，只需要在一个地方登记；Windows 构建仍然 0 error。
-→ 前半条已成立；后半条由 `.github/workflows/ci.yml` 的 `windows-latest` 守住。
+→ 两条都已成立，而且都有机器守过。CI 的 `windows` job（runner pin `windows-2022`：`windows-latest`
+和 `windows-2025` 现在都指向只装 VS 2026 的镜像，而 `windows-game` preset 硬编码 VS 2022 的
+generator）实测 **0 error**，6 个产物全部链接成功，包括 `DragonQuestIV.exe`；`wasm` job 从干净
+checkout 跑 `build.sh`，spike 输出 `= 3`、四条布局断言全过。764 条 MSVC warning 是反编译源码
+原有的噪音（C4838 为主，集中在 `MenuTemplate_*.cpp`），不是 M2 引入的。
 
 ## M3 DS overlay 机制的可移植实现（3–5 天，需要设计）
 
