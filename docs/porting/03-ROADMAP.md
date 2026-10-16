@@ -83,7 +83,12 @@ checkout 跑 `build.sh`，spike 输出 `= 3`、四条布局断言全过。764 �
       （构造自然跑，不做 snapshot/restore），M3 落地后重测标题画面
 - [ ] 用 `wasm/build.sh` 产出 `index.html` + `.wasm` + `.data`，浏览器里能看到**标题画面**
 
-**验收**：浏览器里稳定 60 fps 显示标题/开场画面；`Settings > Display` 的分辨率与拉伸选项可用。
+**验收**（按实测拆开——标题画面归 M5，因为 `GameBoot::openResources()` 没有资产就直接抛）：
+浏览器里渲染管线真的跑起来——GLES 3.0 context、`emscripten_set_main_loop`、canvas 尺寸 /
+`devicePixelRatio` / resize，用测试图案验字节序和 clip，稳定 60 fps；
+`Settings > Display` 的分辨率与拉伸选项可用。
+不依赖浏览器的部分已经有机器门：8 个 shader 两个 profile 都过 glslang（`wasm/check-shaders.py`），
+字节序往返在 layout probe 里钉死。
 
 ## M4b [可选] WebGPU 后端（不排期，等 M4 验收过了再量）
 
