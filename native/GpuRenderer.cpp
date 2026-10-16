@@ -5,7 +5,7 @@
 #include "GxTextures.hpp"
 #include "Profile.hpp"
 #include <algorithm>
-#include <execution>
+#include "Parallel.hpp"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -636,7 +636,7 @@ void GpuRenderer::prepareTextures(std::span<const GpuBatch> batches,GxTextures& 
     // upscaled, the others as they are, upscaled over the next frames.
     constexpr std::size_t fullPerFrame=2;
     ProfileScope timing("texture-prepare");
-    std::for_each(std::execution::par,pending.begin(),pending.end(),[&](Pending& p) {
+    DQIV_PARALLEL_FOR_EACH(pending.begin(),pending.end(),[&](Pending& p) {
         const bool full=std::size_t(&p-pending.data())<fullPerFrame;
         p.pixels=texturePixels(*p.texture,full?settings.textureScale:1,p.width,p.height);
     });
@@ -657,7 +657,7 @@ void GpuRenderer::upgradeTextures() {
     std::vector<std::array<int,2>> sizes(count);
     std::vector<std::size_t> indices(count);
     for(std::size_t i=0;i<count;++i)indices[i]=i;
-    std::for_each(std::execution::par,indices.begin(),indices.end(),[&](std::size_t i) {
+    DQIV_PARALLEL_FOR_EACH(indices.begin(),indices.end(),[&](std::size_t i) {
         pixels[i]=texturePixels(upgrades_[i].texture,settings.textureScale,sizes[i][0],sizes[i][1]);
     });
     for(std::size_t i=0;i<count;++i) {

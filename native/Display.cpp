@@ -4,7 +4,7 @@
 #include "DualScreen.hpp"
 #include <cstdio>
 #include <cstdlib>
-#include <execution>
+#include "Parallel.hpp"
 #include <algorithm>
 #include <stdexcept>
 namespace pc {
@@ -331,7 +331,7 @@ void Display::engine(NitroVideo& video,bool sub,std::span<const std::uint32_t> t
     constexpr unsigned bands=8;
     std::array<unsigned,bands> indices;
     for(unsigned i=0;i<bands;++i)indices[i]=i;
-    std::for_each(std::execution::par,indices.begin(),indices.end(),[&](unsigned i) {band(i*192/bands,(i+1)*192/bands);});
+    DQIV_PARALLEL_FOR_EACH(indices.begin(),indices.end(),[&](unsigned i) {band(i*192/bands,(i+1)*192/bands);});
     {
         // Pictures placed on the screen this engine shows (their colours are
         // in the main engine's palette, as the menu icons').

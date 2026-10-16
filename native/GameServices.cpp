@@ -10,9 +10,11 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 
 namespace {
 struct Allocation { std::size_t size, alignment; void* heap; };
@@ -123,6 +125,7 @@ bool isGameTextPointer(std::uintptr_t value) {
         --it;const auto start=reinterpret_cast<std::uintptr_t>(it->first);
         if(value>=start&&value-start<it->second.size)return true;
     }
+#ifdef _WIN32
     MEMORY_BASIC_INFORMATION info{};
     if(!VirtualQuery(reinterpret_cast<void*>(value),&info,sizeof(info))||info.State!=MEM_COMMIT||
         (info.Protect&(PAGE_GUARD|PAGE_NOACCESS))||!(info.Protect&(PAGE_READONLY|PAGE_READWRITE|PAGE_WRITECOPY)))return false;
@@ -131,6 +134,12 @@ bool isGameTextPointer(std::uintptr_t value) {
     // Only committed bytes in active caller frames can hold a supplied string.
     if(value>=std::max<std::uintptr_t>(low,reinterpret_cast<std::uintptr_t>(&info))&&value<high)return true;
     return info.Type==MEM_IMAGE&&info.AllocationBase==GetModuleHandleW(nullptr);
+#else
+    // With 4-byte pointers every host pointer is inside an address space the game
+    // owns, so the allocation map checked above already covers the pointers the
+    // menu API can hand us (wasm32: the whole linear memory; 32-bit hosts: all of it).
+    return false;
+#endif
 }
 std::size_t gameBytesAfter(const void* pointer) {
     const auto value=reinterpret_cast<std::uintptr_t>(pointer);
