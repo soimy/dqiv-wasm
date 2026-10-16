@@ -104,3 +104,15 @@ target_link_libraries(dqiv_wasm_spike PRIVATE
 # Guard the 32-bit layout assumptions the original DS resources depend on.
 add_executable(dqiv_layout_probe src/layout-probe.cpp)
 target_link_libraries(dqiv_layout_probe PRIVATE dqiv_core)
+
+# The real game, cross-built for wasm32. This is the first time the platform
+# layer is compiled by anything other than MSVC, so it is the gate for all of the
+# renderer work. It links; it does not run yet - there is no main loop and no
+# assets, and a headless node has no WebGL to ask.
+add_executable(dqiv_wasm_game
+    ${DQIV_ROOT}/native/GameBoot.cpp ${DQIV_ROOT}/native/GameWindow.cpp
+    ${DQIV_ROOT}/native/GpuRenderer.cpp ${DQIV_ROOT}/native/GlLoader.cpp
+    ${DQIV_ROOT}/native/TextCanvas.cpp ${DQIV_ROOT}/native/FramePresenter.cpp
+    ${DQIV_ROOT}/native/NitroSymbols.cpp ${DQIV_ROOT}/native/CrashHandler.cpp)
+target_link_libraries(dqiv_wasm_game PRIVATE
+    dqiv_game dqiv_nitro_system dqiv_sound dqiv_platform dqiv_portable)
