@@ -102,3 +102,37 @@ extern "C" void func_02079e24(unsigned char* destination) {
     if(!pc::currentIdentity||!destination) throw std::runtime_error("Device identity requested without its native profile");
     std::memcpy(destination,pc::currentIdentity->address().data(),6);
 }
+
+// The thread API the sound system uses - snd_capture.c creates a thread and wakes
+// it, snd_main.c initialises a mutex. A single-threaded host cannot spawn one, so
+// the SDK's threads are registered here and run when marked runnable, which is
+// what runPortableThreads() does, once per frame, from the frame loop. The stack
+// and priority the caller passes are recorded and unused: there is one stack, the
+// wasm one, and one thread of control.
+namespace pc {
+namespace {
+struct PortableThread { OSThread* sdk; void (*function)(void*); void* argument; bool runnable; };
+PortableThread portableThreads[16];
+unsigned portableCount=0;
+PortableThread* find(OSThread* sdk) {
+    for(unsigned i=0;i<portableCount;++i) if(portableThreads[i].sdk==sdk) return &portableThreads[i];
+    return nullptr;
+}
+}
+void runPortableThreads() {
+    for(unsigned i=0;i<portableCount;++i) {
+        auto& thread=portableThreads[i];
+        if(thread.runnable&&thread.function) {thread.runnable=false;thread.function(thread.argument);}
+    }
+}
+}
+extern "C" {
+void func_020787c4(OSThread* sdk,void (*function)(void*),void* argument,void* stack,unsigned size,unsigned priority) {
+    if(pc::portableCount==16) throw std::runtime_error("Portable thread table full");
+    pc::portableThreads[pc::portableCount++]=pc::PortableThread{sdk,function,argument,false};
+}
+void OS_WakeupThreadDirect(void* pointer) {
+    if(auto* thread=pc::find(static_cast<OSThread*>(pointer))) thread->runnable=true;
+}
+void OS_InitMutex(OSMutex*) {}
+}

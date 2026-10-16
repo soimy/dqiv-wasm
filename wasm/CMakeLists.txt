@@ -122,3 +122,7 @@ add_executable(dqiv_wasm_game EXCLUDE_FROM_ALL
     ${DQIV_ROOT}/native/InputBindings.cpp ${DQIV_ROOT}/native/AudioOutput.cpp)
 target_link_libraries(dqiv_wasm_game PRIVATE
     dqiv_game dqiv_nitro_system dqiv_sound dqiv_platform dqiv_portable)
+# Emscripten turns off exception catching by default, so a throw that a try/catch
+# should have caught aborts instead, and the message is lost. GameBoot reports its
+# failures through an exception, so catching has to be on for this target.
+target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0)

@@ -23,4 +23,10 @@ private:
 };
 unsigned suspendNativeInterrupts();
 void resumeNativeInterrupts(unsigned depth);
+#ifdef __EMSCRIPTEN__
+// Single-threaded host: the threads the SDK creates are registered, not spawned,
+// and this runs the ones marked runnable. The frame loop calls it once per frame,
+// which is what makes the sound system's streaming thread work here.
+void runPortableThreads();
+#endif
 }
