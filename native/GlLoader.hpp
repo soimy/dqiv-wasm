@@ -62,6 +62,7 @@ namespace pc::gl {
 #define DQIV_GL_DECLARE(name,type,symbol) extern type name;
 DQIV_GL11_FUNCTIONS(DQIV_GL11_DECLARE)
 DQIV_GL_FUNCTIONS(DQIV_GL_DECLARE)
+DQIV_GL_DESKTOP_FUNCTIONS(DQIV_GL_DECLARE)
 #undef DQIV_GL11_DECLARE
 #undef DQIV_GL_DECLARE
 // Resolves every entry point; throws when the driver lacks one.

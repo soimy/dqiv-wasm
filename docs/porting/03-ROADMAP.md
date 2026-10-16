@@ -62,12 +62,25 @@ checkout 跑 `build.sh`，spike 输出 `= 3`、四条布局断言全过。764 �
 
 ## M4 WebGL2 / GLES 3.0 渲染后端 + Emscripten 启动壳（1–2 周，最大的一块）
 
-- [ ] `GlLoader`：按目标裁剪入口点表（WebGL2 没有 `glMapBuffer`、计时查询），去掉 `gl::load()` 的"缺一即抛"
-- [ ] 着色器：8 处 `#version 330 core` → `#version 300 es` + 精度限定符；
-      `gl_ClipDistance` 改为 varying + 片元 `discard`
+- [x] `GlLoader`：按 GLES 3.0 逐个核过入口点表，5 个不在表里的已从表里拿掉，现在保留 `gl::load()` 的"缺一即抛"
+- [x] 着色器：8 处 `#version 330 core` → `#version 300 es` + 精度限定符。逐条核过，
+      ES 3.00 唯一缺的是 `gl_ClipDistance`，改成 varying + 片元 `discard`，开关用一个
+      uniform 承载（这是 Windows 侧唯一一处行为改动，是有意的：硬件内建的插值方式
+      规范明说 implementation-dependent，varying 是透视正确的）
+- [x] **字节序**（原计划漏了，11 处）：游戏的约定是 `0xAARRGGBB`，代码按 BGRA 交给 GL。
+      WebGL2 的上传和回读都没有 BGRA 格式，所以 wasm 上先把字节 swizzle 成 RGBA，
+      读回来的 channel 位移相应互换。两个后端现在产出和消费同一套值。
+- [x] 性能剖析路径（GPU 计时）用 `#ifdef` 隔离：`GL_TIME_ELAPSED` 不在 GLES 3.0 里。
+      代价说清楚——`settings.autoQuality` 在 wasm 上会失效，直到接上
+      `EXT_disjoint_timer_query_webgl2`。
+- [ ] Windows 依赖的 wasm 替身（实测这 4 个文件编不过）：`TextCanvas`（整套 GDI，只用来
+      画 FPS 角标）、`CrashHandler`（SEH/SymDB）、`GameBoot`（`windows.h`/`_fsopen`/
+      `MessageBoxA`）、`GameWindow`（`SDL_SavePNG`，emscripten 的 SDL3 port 里没有；
+      建议走 `EM_ASM` 的 `canvas.toDataURL()`，顺带给 M4 留一个可验证的截图手段）
 - [ ] `GameWindow`：改为请求 GLES 3.0；Emscripten 下用 `emscripten_set_main_loop` 替代 Win32 消息循环
 - [ ] `FramePresenter` / `Display`：适配 canvas 尺寸、`devicePixelRatio`、resize 事件
-- [ ] 性能剖析路径（GPU 计时/回读）用 `#ifdef` 隔离，必要时接 `EXT_disjoint_timer_query_webgl2`
+- [ ] `GameBoot` 需要 `gameOverlayImages()`，那是 M3 的 registry。本轮先用最小 stub
+      （构造自然跑，不做 snapshot/restore），M3 落地后重测标题画面
 - [ ] 用 `wasm/build.sh` 产出 `index.html` + `.wasm` + `.data`，浏览器里能看到**标题画面**
 
 **验收**：浏览器里稳定 60 fps 显示标题/开场画面；`Settings > Display` 的分辨率与拉伸选项可用。
