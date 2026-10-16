@@ -33,7 +33,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance=1;
 }
 #else
 // On the web the browser picks the adapter; there is no equivalent switch to
-// make here, so the two symbols simply do not exist on wasm.
+// make here, so the two symbols simply do not exist on wasm. This is also where
+// the main loop comes from, since main() cannot block here.
+#include <emscripten/emscripten.h>
 #endif
 extern "C" {
 #include <nitro/os/thread.h>
@@ -94,6 +96,95 @@ pc::Assets openResources() {
     if(!assets.contains("data/SOUND/sound_data.sdat"))throw std::runtime_error("Game data not found: build the game with build.ps1");
     return assets;
 }
+// Everything the frame needs, in one place. On Windows this lived on main's
+// stack; on wasm main() returns as soon as the loop is registered, so the run has
+// to outlive it and the loop becomes a callback. Keeping one definition here is
+// what stops that from becoming two copies of this file.
+//
+// Declaration order is build order, and destruction runs in reverse, so clearWait
+// sits last - exactly where it used to sit - and still destructs first.
+struct GameRun {
+    pc::Assets assets{openResources()};
+    pc::GameWindow window{false,false};
+    pc::GameServices services{assets};
+    pc::NitroFilesystem filesystem{assets};
+    const std::filesystem::path savePath{pc::defaultSavePath()};
+    pc::SaveStore save{savePath};
+    std::filesystem::path identityPath{savePath.string()+".identity"};
+    pc::NitroIdentity identity{identityPath};
+    pc::NitroBackup backup{save};
+    pc::NitroVideo video;
+    pc::NitroPower power;
+    pc::GxGeometry geometry;
+    pc::NitroGeometry geometryContext{geometry};
+    pc::GxTextures textures;
+    pc::Display display;
+    pc::NitroSound sound;
+    pc::MobileSound mobileSound{assets,48000};
+    pc::NitroThreads threads;
+    pc::NitroOverlays overlays{gameOverlayImages()};
+    pc::FramePresenter presenter{window,display,textures};
+    OSThreadQueue frameQueue{};
+    std::array<std::int16_t,1600> samples{};
+    unsigned renderedSwap=0;
+    bool fastFrame=false;
+    unsigned boostFrames=0;
+    bool running=true;
+    int scene=-1;
+    unsigned frame=0;
+    struct ClearWait {~ClearWait(){pc::setWaitCallback({});pc::setFrameCallback({});}} clearWait;
+
+    void setup() {
+        // Both DS screens become one picture, presented by the GPU.
+        pc::dualScreen().unified=true;
+        pc::dualScreen().canvasWidth=384*16/9.f;
+        window.applySettings();
+        if(!overlays.load(38)) throw std::runtime_error("Cannot construct main game module");
+        pc::setFrameCallback([this] {
+            pc::ProfileScope frameTiming("render-callback");
+            if(geometry.swaps()!=renderedSwap) {
+                renderedSwap=geometry.swaps();
+                auto state=geometry.raster;
+                state.fogColor=*static_cast<unsigned*>(video.reg(0x04000358,4));
+                pc::GxRenderOptions options;
+                options.displayControl=*static_cast<unsigned short*>(video.reg(0x04000060,2));
+                options.wBuffer=(geometry.swapParameters()&2)!=0;options.manualSort=(geometry.swapParameters()&1)!=0;
+                presenter.frame(video,geometry,state,options,false);
+            }
+            if(!fastFrame)presenter.present();
+        });
+        // Faster battles (settings): only one game frame in 2, 3 or 4 is
+        // shown, paced and heard; the music keeps its tempo.
+        threads.setIdleHandler([this] {
+            running=window.poll();
+            const bool shown=!fastFrame;
+            const int boost=data_0210bb94.unkfunc_0205810c()==13?pc::gameSettings().battleBoost+1:1;
+            fastFrame=boost>1&&++boostFrames%unsigned(boost)!=0;
+            if(shown) {
+                pc::ProfileScope timing("sound");
+                sound.render(samples);mobileSound.mix(samples);
+            }
+            power.advanceFrame();pc::advanceWireless();
+            if(shown) {window.audio(samples);window.pace();}
+            OS_UnpauseThread(&frameQueue);
+        });
+        pc::setWaitCallback([this] {OS_PauseThread(&frameQueue);threads.checkErrors();});
+    }
+    void step() {
+        // The journal keeps the scene changes (battle, town, field...).
+        const auto currentScene=int(data_0210bb94.unkfunc_0205810c());
+        if(scene!=currentScene) {scene=currentScene;std::cout<<"Scene "<<scene<<", frame "<<frame<<'\n';}
+        threads.checkErrors();
+        {
+            pc::ProfileScope stepTiming("frame");
+            if(!data_0210bb94.nativeStep()) {running=false;return;}
+        }
+        pc::profileFrame();
+        geometry.clearTriangles();
+        ++frame;
+    }
+};
+GameRun* gameRun=nullptr;   // the wasm loop callback needs a handle to it
 }
 
 int main() {
@@ -122,85 +213,25 @@ int main() {
     try {
         std::cout.setf(std::ios::unitbuf);
         pc::loadSettings();
-        pc::Assets assets=openResources();
-        pc::GameWindow window(false,false);
-        // Both DS screens become one picture, presented by the GPU.
-        pc::dualScreen().unified=true;
-        pc::dualScreen().canvasWidth=384*16/9.f;
-        window.applySettings();
-        bool running=true;
-        pc::GameServices services(assets);
-        pc::NitroFilesystem filesystem(assets);
-        const auto savePath=pc::defaultSavePath();
-        pc::SaveStore save(savePath);
-        auto identityPath=savePath;identityPath+=L".identity";
-        pc::NitroIdentity identity(identityPath);
-        pc::NitroBackup backup(save);
-        pc::NitroVideo video;
-        pc::NitroPower power;
-        pc::GxGeometry geometry;pc::NitroGeometry geometryContext(geometry);
-        pc::GxTextures textures;
-        pc::Display display;
-        unsigned renderedSwap=0;
-        pc::NitroSound sound;
-        pc::MobileSound mobileSound(assets,48000);
-        OSThreadQueue frameQueue{};
-        std::array<std::int16_t,1600> samples{};
-        pc::NitroThreads threads;
-        pc::NitroOverlays overlays(gameOverlayImages());
-        if(!overlays.load(38)) throw std::runtime_error("Cannot construct main game module");
-        pc::FramePresenter presenter(window,display,textures);
-        // Faster battles (settings): only one game frame in 2, 3 or 4 is
-        // shown, paced and heard; the music keeps its tempo.
-        bool fastFrame=false;unsigned boostFrames=0;
-        pc::setFrameCallback([&] {
-            pc::ProfileScope frameTiming("render-callback");
-            if(geometry.swaps()!=renderedSwap) {
-                renderedSwap=geometry.swaps();
-                auto state=geometry.raster;
-                state.fogColor=*static_cast<unsigned*>(video.reg(0x04000358,4));
-                pc::GxRenderOptions options;
-                options.displayControl=*static_cast<unsigned short*>(video.reg(0x04000060,2));
-                options.wBuffer=(geometry.swapParameters()&2)!=0;options.manualSort=(geometry.swapParameters()&1)!=0;
-                presenter.frame(video,geometry,state,options,false);
-            }
-            if(!fastFrame)presenter.present();
-        });
-        threads.setIdleHandler([&] {
-            running=window.poll();
-            const bool shown=!fastFrame;
-            const int boost=data_0210bb94.unkfunc_0205810c()==13?pc::gameSettings().battleBoost+1:1;
-            fastFrame=boost>1&&++boostFrames%unsigned(boost)!=0;
-            if(shown) {
-                pc::ProfileScope timing("sound");
-                sound.render(samples);mobileSound.mix(samples);
-            }
-            power.advanceFrame();pc::advanceWireless();
-            if(shown) {window.audio(samples);window.pace();}
-            OS_UnpauseThread(&frameQueue);
-        });
-        pc::setWaitCallback([&] {OS_PauseThread(&frameQueue);threads.checkErrors();});
-        struct ClearWait {~ClearWait(){pc::setWaitCallback({});pc::setFrameCallback({});}} clearWait;
+        static GameRun run;   // static so it outlives main() on wasm, see below
+        run.setup();
         std::cout << "Original application initialization\n";
         data_020c4fe4.unkfunc_02057f8c(0);
         data_0210bb94.nativeStart(data_020c4fe4.vf10());
-        int scene=-1;
-        for(unsigned frame=0;running;++frame) {
-            // The journal keeps the scene changes (battle, town, field...).
-            const auto currentScene=int(data_0210bb94.unkfunc_0205810c());
-            if(scene!=currentScene) {scene=currentScene;std::cout<<"Scene "<<scene<<", frame "<<frame<<'\n';}
-            threads.checkErrors();
-            {
-                pc::ProfileScope step("frame");
-                if(!data_0210bb94.nativeStep())break;
-            }
-            pc::profileFrame();
-            geometry.clearTriangles();
-        }
-        threads.checkErrors();
+#ifdef __EMSCRIPTEN__
+        // main() cannot block here. It returns as soon as the loop is registered,
+        // which is why the run above is static and why the loop is a callback.
+        // 0 means use the browser's own frame timing.
+        gameRun=&run;
+        emscripten_set_main_loop([] { gameRun->step(); },0,1);
+        return 0;
+#else
+        while(run.running)run.step();
+        run.threads.checkErrors();
         data_0210bb94.nativeStop();
         pc::setButtons(0);
         return 0;
+#endif
     } catch (const std::exception& error) {
         std::cerr << "Dragon Quest IV stopped: " << error.what() << '\n';
         std::cerr.flush();showError(error.what());
