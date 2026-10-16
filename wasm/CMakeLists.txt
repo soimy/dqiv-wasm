@@ -107,12 +107,18 @@ target_link_libraries(dqiv_layout_probe PRIVATE dqiv_core)
 
 # The real game, cross-built for wasm32. This is the first time the platform
 # layer is compiled by anything other than MSVC, so it is the gate for all of the
-# renderer work. It links; it does not run yet - there is no main loop and no
-# assets, and a headless node has no WebGL to ask.
-add_executable(dqiv_wasm_game
+# renderer work. It does not link yet, so it is kept out of the default build and
+# built by hand until the gap closes. What is still missing, as the linker said:
+#   func_020787c4, OS_WakeupThreadDirect, OS_InitMutex - all three live in
+#   native/NitroThreads.cpp, Windows-only upstream, and the caller is
+#   game/libs/NitroSystem/src/snd/snd_arcstrm.c. So this is the audio streaming
+#   thread: a real thread that gets created and waited on, not something a
+#   no-op stand-in can honestly cover.
+add_executable(dqiv_wasm_game EXCLUDE_FROM_ALL
     ${DQIV_ROOT}/native/GameBoot.cpp ${DQIV_ROOT}/native/GameWindow.cpp
     ${DQIV_ROOT}/native/GpuRenderer.cpp ${DQIV_ROOT}/native/GlLoader.cpp
     ${DQIV_ROOT}/native/TextCanvas.cpp ${DQIV_ROOT}/native/FramePresenter.cpp
-    ${DQIV_ROOT}/native/NitroSymbols.cpp ${DQIV_ROOT}/native/CrashHandler.cpp)
+    ${DQIV_ROOT}/native/NitroSymbols.cpp ${DQIV_ROOT}/native/CrashHandler.cpp
+    ${DQIV_ROOT}/native/InputBindings.cpp ${DQIV_ROOT}/native/AudioOutput.cpp)
 target_link_libraries(dqiv_wasm_game PRIVATE
     dqiv_game dqiv_nitro_system dqiv_sound dqiv_platform dqiv_portable)
