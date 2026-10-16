@@ -33,6 +33,7 @@
 ```bash
 git clone https://github.com/soimy/dqiv-wasm
 cd dqiv-wasm
+git switch wasm            # 移植工作都在 wasm 分支上；main 只镜像上游
 
 # 需要一个激活过的 emsdk
 source /path/to/emsdk/emsdk_env.sh
@@ -57,7 +58,10 @@ Windows 原生构建不受影响，仍按上游说明使用 `build.bat` / `build
 
 ## 同步上游
 
+移植工作都在 **`wasm` 分支**上，`main` 只镜像上游、可以无条件 fast-forward。
+
 ```bash
+git switch wasm
 git fetch upstream
 git merge upstream/main     # 本 fork 的改动都是"非 Windows 才生效"或纯新增，冲突面很小
 ```

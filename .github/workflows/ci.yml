@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [wasm, main]
   pull_request:
-    branches: [main]
+    branches: [wasm, main]
 
 jobs:
   # The upstream Windows build. This is the only place that can honestly hold the

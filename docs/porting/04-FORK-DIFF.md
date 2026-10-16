@@ -1,8 +1,10 @@
 # 本 fork 相对上游的改动
 
 - Fork: `soimy/dqiv-wasm`（原 `GoldieLeGenie/DQIV-Recompiled`，改名保留 fork 关系）
-- 上游基线：`e1826f9`（`main`）
-- `upstream` remote 已配置，同步上游：`git fetch upstream && git merge upstream/main`
+- 上游基线：`e1826f9`
+- **分支布局（2026-10 起）**：`main` 只镜像上游，本 fork 的全部工作都在 **`wasm` 分支**上。
+  同步上游：`git fetch upstream && git merge upstream/main`，在 `wasm` 上执行；
+  `main` 保持纯上游、可以无条件 fast-forward。
 
 ## 原则
 
