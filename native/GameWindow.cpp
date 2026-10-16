@@ -6,6 +6,9 @@
 #include "Profile.hpp"
 #include "Settings.hpp"
 #include <SDL3/SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -231,6 +234,14 @@ void GameWindow::present(const GpuLayout& layout,std::span<const std::uint32_t> 
     if(screenshot_) {
         // F12: PNG beside the save file.
         screenshot_=false;
+#ifdef __EMSCRIPTEN__
+        // emscripten's SDL3 port has no PNG writer. The browser can encode its
+        // own canvas, so the screenshot becomes a download named the same way -
+        // which is also the way to check what the page is actually showing.
+        const auto name="capture-"+std::to_string(SDL_GetTicks())+".png";
+        emscripten_run_script(("var c=document.querySelector('canvas');if(c){var a=document.createElement('a');"
+            "a.href=c.toDataURL('image/png');a.download='"+name+"';a.click();}").c_str());
+#else
         int w=0,h=0;auto pixels=gpu_->readPresented(w,h);
         if(auto* surface=SDL_CreateSurfaceFrom(w,h,SDL_PIXELFORMAT_ARGB8888,pixels.data(),w*4)) {
             if(char* base=SDL_GetPrefPath(nullptr,"DQIV-PC")) {
@@ -239,6 +250,7 @@ void GameWindow::present(const GpuLayout& layout,std::span<const std::uint32_t> 
             }
             SDL_DestroySurface(surface);
         }
+#endif
     }
     // Frames per second, counted over each second.
     ++fpsFrames_;

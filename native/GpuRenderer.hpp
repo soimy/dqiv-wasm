@@ -139,7 +139,10 @@ private:
     Target scene_[2],native_,output_,fogged_[2],world_;
     unsigned lastSlot_=0,readBuffers_[2]{};
     bool readPending_[2]{},fogApplied_[2]{};
-    unsigned frameQueries_[4]{},queryHead_=0,queriesPending_=0;
+    unsigned frameQueries_[4]{};
+#ifndef __EMSCRIPTEN__
+    unsigned queryHead_=0,queriesPending_=0; // the GPU-time query ring, desktop only
+#endif
     bool queryActive_=false;
     double gpuTime_=0; // nanoseconds summed over gpuSamples_ frames
     unsigned gpuSamples_=0,quietWindows_=0,busyWindows_=0;

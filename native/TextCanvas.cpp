@@ -1,13 +1,16 @@
 #include "TextCanvas.hpp"
+#ifndef __EMSCRIPTEN__
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 #include <algorithm>
 #include <stdexcept>
 #include <string>
 
 namespace pc {
 namespace {
+#ifndef __EMSCRIPTEN__
 std::wstring wide(std::string_view utf8) {
     if(utf8.empty())return {};
     const int count=MultiByteToWideChar(CP_UTF8,0,utf8.data(),int(utf8.size()),nullptr,0);
@@ -15,6 +18,7 @@ std::wstring wide(std::string_view utf8) {
     MultiByteToWideChar(CP_UTF8,0,utf8.data(),int(utf8.size()),result.data(),count);
     return result;
 }
+#endif
 std::uint32_t blend(std::uint32_t below,std::uint32_t argb,unsigned coverage) {
     // Straight colour over a premultiplied pixel, with coverage 0..255.
     const unsigned a=((argb>>24)*coverage+127)/255;
@@ -29,6 +33,9 @@ std::uint32_t blend(std::uint32_t below,std::uint32_t argb,unsigned coverage) {
 }
 TextCanvas::TextCanvas(int width,int height):width_(std::max(1,width)),height_(std::max(1,height)),
     pixels_(std::size_t(width_)*height_) {
+#ifndef __EMSCRIPTEN__
+    // No GDI here: the mask stays null and text() has nothing to draw with.
+    // clear() and fill() are pure CPU and work on both backends.
     BITMAPINFO info{};
     info.bmiHeader.biSize=sizeof(info.bmiHeader);info.bmiHeader.biWidth=width_;info.bmiHeader.biHeight=-height_;
     info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
@@ -39,10 +46,13 @@ TextCanvas::TextCanvas(int width,int height):width_(std::max(1,width)),height_(s
     mask_=static_cast<std::uint32_t*>(bits);
     previous_=SelectObject(static_cast<HDC>(dc_),static_cast<HBITMAP>(bitmap_));
     SetBkMode(static_cast<HDC>(dc_),TRANSPARENT);SetTextColor(static_cast<HDC>(dc_),RGB(255,255,255));
+#endif
 }
 TextCanvas::~TextCanvas() {
+#ifndef __EMSCRIPTEN__
     SelectObject(static_cast<HDC>(dc_),static_cast<HGDIOBJ>(previous_));
     DeleteObject(static_cast<HBITMAP>(bitmap_));DeleteDC(static_cast<HDC>(dc_));
+#endif
 }
 void TextCanvas::clear(std::uint32_t argb) {
     const unsigned a=argb>>24;
@@ -57,6 +67,13 @@ void TextCanvas::fill(int x,int y,int width,int height,std::uint32_t argb) {
     }
 }
 void TextCanvas::text(int x,int y,std::string_view utf8,int size,std::uint32_t argb,bool bold,int align,int boxWidth) {
+#ifdef __EMSCRIPTEN__
+    // No GDI, so no system font renderer. The overlay keeps its rectangle and
+    // loses its text; a portable rasterizer (stb_truetype plus a shipped font)
+    // is the open decision this stands on.
+    (void)x;(void)y;(void)utf8;(void)size;(void)argb;(void)bold;(void)align;(void)boxWidth;
+    return;
+#else
     const auto string=wide(utf8);
     if(string.empty())return;
     HDC dc=static_cast<HDC>(dc_);
@@ -78,5 +95,6 @@ void TextCanvas::text(int x,int y,std::string_view utf8,int size,std::uint32_t a
             const unsigned coverage=std::max({m&255,(m>>8)&255,(m>>16)&255});
             if(coverage){auto& p=pixels_[std::size_t(row)*width_+column];p=blend(p,argb,coverage);}
         }
+#endif
 }
 }

@@ -1,15 +1,20 @@
 // Crash reporting: native faults and uncaught exceptions print a symbolized
 // stack to the journal and show an error before the process ends.
+#ifndef __EMSCRIPTEN__
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <dbghelp.h>
+#pragma comment(lib,"dbghelp.lib")
+#else
+#include <emscripten/emscripten.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
-#pragma comment(lib,"dbghelp.lib")
 namespace {
+#ifndef __EMSCRIPTEN__
 void trace(CONTEXT* context=nullptr) {
     auto process=GetCurrentProcess();
     // Symbols beside the executable first (copied or packaged builds).
@@ -69,7 +74,19 @@ bool divideLikeTheDs(CONTEXT* context) {
     context->Eip+=length;
     return true;
 }
+#else
+// There is no recoverable fault here. wasm traps on integer division by zero
+// and the instance is gone, so the DS division semantics above cannot be
+// recovered from a trap - they have to be handled where the division happens.
+void trace() {
+    char buffer[1024];
+    const int length=emscripten_get_callstack(EM_LOG_C_STACK,buffer,int(sizeof(buffer)));
+    if(length>0)std::fprintf(stderr,"Crash stack: %s\n",buffer);
+    std::fflush(stderr);
+}
+#endif
 int installCrashHandler() {
+#ifndef __EMSCRIPTEN__
     SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
     AddVectoredExceptionHandler(1,[](EXCEPTION_POINTERS* failure)->LONG {
         const auto code=failure->ExceptionRecord->ExceptionCode;
@@ -98,15 +115,25 @@ int installCrashHandler() {
             "Dragon Quest IV",MB_OK|MB_ICONERROR);
         TerminateProcess(GetCurrentProcess(),4);return EXCEPTION_CONTINUE_SEARCH;
     });
+#endif
     std::set_terminate([] {
         try {if(auto failure=std::current_exception()) std::rethrow_exception(failure);}
         catch(const std::exception& error) {std::fprintf(stderr,"Fatal native initialization: %s\n",error.what());}
         catch(...) {std::fprintf(stderr,"Fatal native initialization: unknown exception\n");}
-        trace();TerminateProcess(GetCurrentProcess(),3);
+        trace();
+#ifndef __EMSCRIPTEN__
+        TerminateProcess(GetCurrentProcess(),3);
+#endif
     });
     return 0;
 }
 }
+#ifndef __EMSCRIPTEN__
 #pragma section(".CRT$XIB",read)
 extern "C" __declspec(allocate(".CRT$XIB")) int (__cdecl* const pcCrashHandlerInitializer)()=installCrashHandler;
 #pragma comment(linker,"/include:_pcCrashHandlerInitializer")
+#else
+// The .CRT$XIB trick is MSVC-only, so on wasm the startup code calls this
+// itself instead of the linker arranging it.
+extern "C" void pcInstallCrashHandler() {installCrashHandler();}
+#endif

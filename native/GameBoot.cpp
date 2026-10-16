@@ -22,12 +22,19 @@
 #include "NitroWireless.hpp"
 #include "Input.hpp"
 #include "Settings.hpp"
+#ifdef _MSC_VER
 #include <share.h>
+#endif
 // Laptops with two graphics chips run the game on the discrete one.
+#ifndef __EMSCRIPTEN__
 extern "C" {
 __declspec(dllexport) unsigned long NvOptimusEnablement=1;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance=1;
 }
+#else
+// On the web the browser picks the adapter; there is no equivalent switch to
+// make here, so the two symbols simply do not exist on wasm.
+#endif
 extern "C" {
 #include <nitro/os/thread.h>
 }
@@ -37,9 +44,11 @@ extern "C" {
 #include <cstdio>
 #include <exception>
 #include <iostream>
+#ifndef __EMSCRIPTEN__
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#endif
 
 static_assert(sizeof(void*) == 4, "The original game resources contain 32-bit pointers");
 static_assert(sizeof(DataObject) == 0x10);
@@ -62,7 +71,13 @@ void adoptPreviousSave() {
 }
 void showError(const std::string& text) {
     const auto message="Dragon Quest IV a rencontre une erreur et doit se fermer.\n\n"+text+"\n\nJournal : "+journalPath();
+#ifdef __EMSCRIPTEN__
+    // No dialog box here. The message goes to the journal, which is what this
+    // sentence is pointing at anyway.
+    std::cerr << message << '\n' << std::flush;
+#else
     MessageBoxA(nullptr,message.c_str(),"Dragon Quest IV",MB_OK|MB_ICONERROR);
+#endif
 }
 // The game's resources: packed inside the executable or, in a build tree, the
 // assets folder (the game's data) and the addons folder (the PC version's
@@ -91,9 +106,18 @@ int main() {
             std::filesystem::copy_options::overwrite_existing,ignored);
         // Shared opening: a second running copy of the game must not lose its
         // output (an exclusive journal would leave it without a stdout).
+#ifdef __EMSCRIPTEN__
+        if(FILE* file=std::fopen(journalPath().c_str(),"w"))std::fclose(file);
+#else
         if(FILE* file=_fsopen(journalPath().c_str(),"w",_SH_DENYWR))std::fclose(file);
-        if(!std::freopen(journalPath().c_str(),"a",stdout))std::freopen("NUL","w",stdout);
-        if(!std::freopen(journalPath().c_str(),"a",stderr))std::freopen("NUL","w",stderr);
+#endif
+#ifdef __EMSCRIPTEN__
+        constexpr const char* nullDevice="/dev/null";
+#else
+        constexpr const char* nullDevice="NUL";
+#endif
+        if(!std::freopen(journalPath().c_str(),"a",stdout))std::freopen(nullDevice,"w",stdout);
+        if(!std::freopen(journalPath().c_str(),"a",stderr))std::freopen(nullDevice,"w",stderr);
     }
     try {
         std::cout.setf(std::ios::unitbuf);

@@ -23,9 +23,12 @@ public:
 private:
     int width_,height_;
     std::vector<std::uint32_t> pixels_;
+#ifndef __EMSCRIPTEN__
+    // The GDI text pass. Without GDI there is nothing for these to hold.
     void* dc_=nullptr;
     void* bitmap_=nullptr;
     void* previous_=nullptr;
     std::uint32_t* mask_=nullptr; // the text pass, white on black
+#endif
 };
 }
