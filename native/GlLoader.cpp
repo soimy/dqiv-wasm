@@ -8,6 +8,7 @@ namespace pc::gl {
 #define DQIV_GL_DEFINE(name,type,symbol) type name=nullptr;
 DQIV_GL11_FUNCTIONS(DQIV_GL11_DEFINE)
 DQIV_GL_FUNCTIONS(DQIV_GL_DEFINE)
+DQIV_GL_DESKTOP_FUNCTIONS(DQIV_GL_DEFINE)
 #undef DQIV_GL11_DEFINE
 #undef DQIV_GL_DEFINE
 void load() {
@@ -20,6 +21,7 @@ void load() {
 #define DQIV_GL_LOAD(name,type,symbol) name=reinterpret_cast<type>(resolve(#symbol));
     DQIV_GL11_FUNCTIONS(DQIV_GL11_LOAD)
     DQIV_GL_FUNCTIONS(DQIV_GL_LOAD)
+    DQIV_GL_DESKTOP_FUNCTIONS(DQIV_GL_LOAD)
 #undef DQIV_GL11_LOAD
 #undef DQIV_GL_LOAD
 }

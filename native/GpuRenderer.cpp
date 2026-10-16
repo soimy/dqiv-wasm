@@ -22,7 +22,42 @@ void gpuCheckpoint(const char* stage) {
 }
 }
 namespace {
-const char* sceneVertex=R"(#version 330 core
+// The only divergence between the two backends. Everything these shaders use —
+// layout(location=), flat uvec4, textureLod, textureSize, texelFetch,
+// isampler2D, gl_FragDepth, dynamic indexing of uniform arrays — is in GLSL ES
+// 3.00. Precision qualifiers are required in ES fragment shaders and legal to
+// state explicitly on desktop, so they ride along with the version line.
+// gl_ClipDistance is the single exception, handled below.
+#ifdef __EMSCRIPTEN__
+#define DQIV_GLSL_HEADER "#version 300 es\nprecision highp float;\nprecision highp int;\n"
+#else
+#define DQIV_GLSL_HEADER "#version 330 core\n"
+#endif
+// The game's pixel convention is 0xAARRGGBB. Desktop GL accepts that memory
+// order directly through GL_BGRA; WebGL2 has no BGRA format for texture uploads
+// or readbacks, so on wasm the bytes are swizzled into RGBA order first. Both
+// paths end up with the same texture contents and the same channel shifts.
+#ifdef __EMSCRIPTEN__
+constexpr GLuint kUploadFormat=GL_RGBA;
+constexpr unsigned kShiftR=0,kShiftG=8,kShiftB=16;   // a readback gives 0xAABBGGRR
+#else
+constexpr GLuint kUploadFormat=GL_BGRA;
+constexpr unsigned kShiftR=16,kShiftG=8,kShiftB=0;   // a readback gives 0xAARRGGBB
+#endif
+// Pixels in the game's convention, in the byte order this backend's GL accepts.
+// On desktop that is the order they are already in, so the pointer comes back
+// unchanged; on wasm the bytes are swizzled into a scratch buffer first.
+const std::uint32_t* uploadOrder(std::span<const std::uint32_t> pixels,std::vector<std::uint32_t>& scratch) {
+#ifdef __EMSCRIPTEN__
+    if(pixels.empty())return pixels.data();
+    scratch.assign(pixels.begin(),pixels.end());
+    for(auto& p:scratch) {const unsigned a=p>>24,r=(p>>16)&255,g=(p>>8)&255,b=p&255;p=(a<<24)|(b<<16)|(g<<8)|r;}
+    return scratch.data();
+#else
+    (void)scratch;return pixels.data();
+#endif
+}
+const char* sceneVertex=DQIV_GLSL_HEADER R"(
 layout(location=0) in vec4 aPosition;
 layout(location=1) in vec4 aColor;
 layout(location=2) in vec4 aTexture;
@@ -35,29 +70,37 @@ flat out vec2 vSize;
 flat out uvec4 vParams;
 flat out vec4 vRect;
 out float vW;
+out vec4 vClip;
 void main() {
     gl_Position=aPosition;vColor=aColor.rgb;vUv=aTexture.xy;vSize=aTexture.zw;vParams=aParams;vW=aPosition.w;vRect=aRect;
     // The DS screen's own edges, for overlays placed inside a larger target.
-    gl_ClipDistance[0]=aClip.x;gl_ClipDistance[1]=aClip.y;gl_ClipDistance[2]=aClip.z;gl_ClipDistance[3]=aClip.w;
+    // GLSL ES 3.00 has no gl_ClipDistance, so the values ride down as a varying
+    // and the fragment shader discards. This is also what makes the behaviour
+    // deterministic: the hardware built-in's interpolation is explicitly
+    // implementation-dependent, a varying is perspective-correct.
+    vClip=aClip;
 })";
 // DS 3D pixel pipeline: vertex colour, texture blend modes, toon/highlight,
 // alpha test. Colour channels are in the hardware's 0..63 range until output.
-const char* sceneFragment=R"(#version 330 core
+const char* sceneFragment=DQIV_GLSL_HEADER R"(
 in vec3 vColor;
 in vec2 vUv;
 flat in vec2 vSize;
 flat in uvec4 vParams;
 flat in vec4 vRect;
 in float vW;
+in vec4 vClip;
 uniform sampler2D uTexture;
 uniform int uControl;
 uniform float uAlphaReference;
 uniform vec3 uToon[32];
 uniform int uWBuffer;
 uniform int uPass;
+uniform bool uClipEnabled;
 layout(location=0) out vec4 oColor;
 layout(location=1) out vec4 oAttributes;
 void main() {
+    if(uClipEnabled&&min(min(vClip.x,vClip.y),min(vClip.z,vClip.w))<0.0)discard;
     uint attributes=vParams.x,flags=vParams.z;
     uint mode=(attributes>>4)&3u;
     float alpha=float((attributes>>16)&31u);
@@ -106,7 +149,7 @@ void main() {
     if(((attributes>>14)&1u)!=0u) depth-=512.0/16777215.0;
     gl_FragDepth=depth;
 })";
-const char* fullscreenVertex=R"(#version 330 core
+const char* fullscreenVertex=DQIV_GLSL_HEADER R"(
 out vec2 vPosition;
 void main() {
     vec2 corner=vec2(float(gl_VertexID&1),float((gl_VertexID>>1)&1));
@@ -114,7 +157,7 @@ void main() {
 })";
 // Two fog settings (lower and upper part of the target) blended over a band,
 // for the unified two-screen picture; both are equal otherwise.
-const char* fogFragment=R"(#version 330 core
+const char* fogFragment=DQIV_GLSL_HEADER R"(
 uniform sampler2D uColor;
 uniform sampler2D uDepth;
 uniform sampler2D uAttributes;
@@ -149,7 +192,7 @@ void main() {
     oColor=color;
 })";
 // Interface pictures (premultiplied) placed over the presented frame.
-const char* overlayVertex=R"(#version 330 core
+const char* overlayVertex=DQIV_GLSL_HEADER R"(
 uniform vec4 uRect;
 out vec2 vPosition;
 void main() {
@@ -157,12 +200,12 @@ void main() {
     vPosition=vec2(corner.x,1.0-corner.y);
     gl_Position=vec4(mix(uRect.xy,uRect.zw,corner),0.0,1.0);
 })";
-const char* overlayFragment=R"(#version 330 core
+const char* overlayFragment=DQIV_GLSL_HEADER R"(
 in vec2 vPosition;
 uniform sampler2D uPicture;
 out vec4 oColor;
 void main() {oColor=texture(uPicture,vPosition);})";
-const char* reduceFragment=R"(#version 330 core
+const char* reduceFragment=DQIV_GLSL_HEADER R"(
 uniform sampler2D uSource;
 uniform vec2 uOrigin;
 uniform vec2 uScale;
@@ -175,7 +218,7 @@ void main() {
 })";
 // Final picture: per-pixel DS composition recipes (see Display) applied to
 // the high-resolution 3D layer, then master brightness.
-const char* composeFragment=R"(#version 330 core
+const char* composeFragment=DQIV_GLSL_HEADER R"(
 in vec2 vPosition;
 uniform sampler2D uRecipe0;
 uniform sampler2D uRecipe1;
@@ -441,12 +484,12 @@ GpuRenderer::GpuRenderer() {
     gl::GenTextures(4,recipeTextures_);
     for(auto texture:recipeTextures_) {
         gl::BindTexture(GL_TEXTURE_2D,texture);
-        gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,256,GpuLayout::recipeRows,0,GL_BGRA,GL_UNSIGNED_BYTE,nullptr);
+        gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,256,GpuLayout::recipeRows,0,kUploadFormat,GL_UNSIGNED_BYTE,nullptr);
         gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
     }
     gl::GenQueries(4,frameQueries_);
     gl::GenTextures(1,&hdAtlas_);gl::BindTexture(GL_TEXTURE_2D,hdAtlas_);
-    gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,hdCellSize*hdAtlasCells,hdCellSize*hdAtlasCells,0,GL_BGRA,GL_UNSIGNED_BYTE,nullptr);
+    gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,hdCellSize*hdAtlasCells,hdCellSize*hdAtlasCells,0,kUploadFormat,GL_UNSIGNED_BYTE,nullptr);
     gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
     gl::GenTextures(1,&sideColumns_);gl::BindTexture(GL_TEXTURE_2D,sideColumns_);
     gl::TexImage2D(GL_TEXTURE_2D,0,GL_R32I,2,384,0,GL_RED_INTEGER,GL_INT,nullptr);
@@ -475,7 +518,8 @@ void GpuRenderer::drawOverlay(unsigned id,std::span<const std::uint32_t> pixels,
     gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,picture.name);
     if(changed||picture.width!=width||picture.height!=height) {
         gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
-        gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_BGRA,GL_UNSIGNED_BYTE,pixels.data());
+        std::vector<std::uint32_t> scratch;
+        gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,kUploadFormat,GL_UNSIGNED_BYTE,uploadOrder(pixels,scratch));
         picture.width=width;picture.height=height;
     }
     gl::BindFramebuffer(GL_FRAMEBUFFER,0);gl::Viewport(0,0,windowWidth,windowHeight);
@@ -489,20 +533,28 @@ void GpuRenderer::drawOverlay(unsigned id,std::span<const std::uint32_t> pixels,
 }
 int GpuRenderer::supersample() const {return std::clamp(settings.autoQuality?std::min(settings.supersample,autoSupersample_):settings.supersample,1,4);}
 void GpuRenderer::beginFrameTiming() {
+#ifndef __EMSCRIPTEN__
     if(queryActive_||queriesPending_==4)return;
     gl::BeginQuery(GL_TIME_ELAPSED,frameQueries_[queryHead_]);queryActive_=true;
+#endif
 }
 void GpuRenderer::endFrameTiming() {
+#ifndef __EMSCRIPTEN__
+    // GL_TIME_ELAPSED and glGetQueryObjectui64v are not in GLES 3.0, so WebGL2
+    // has no GPU-time query: nothing gets timed, gpuSamples_ never reaches the
+    // threshold below, and automatic supersampling stays at the user's setting
+    // until EXT_disjoint_timer_query_webgl2 is wired up.
     if(queryActive_) {gl::EndQuery(GL_TIME_ELAPSED);queryActive_=false;queryHead_=(queryHead_+1)%4;++queriesPending_;}
     // Results arrive a few frames later; collect those that are ready.
     while(queriesPending_) {
         const auto query=frameQueries_[(queryHead_+4-queriesPending_)%4];
-        int available=0;gl::GetQueryObjectiv(query,GL_QUERY_RESULT_AVAILABLE,&available);
+        unsigned available=0;gl::GetQueryObjectuiv(query,GL_QUERY_RESULT_AVAILABLE,&available);
         if(!available)break;
         GLuint64 time=0;gl::GetQueryObjectui64v(query,GL_QUERY_RESULT,&time);
         --queriesPending_;gpuTime_+=double(time);++gpuSamples_;
         if(profiling())profileAdd("gpu-frame",double(time)/1000);
     }
+#endif
     if(gpuSamples_<30)return;
     // Over 11 ms of GPU work per frame leaves too little margin for 60 frames
     // per second: lower the supersampling. Raise it again after a long quiet spell.
@@ -588,7 +640,8 @@ void GpuRenderer::finishUpload(GpuTexture& entry,const std::vector<std::uint32_t
     if(!entry.name)gl::GenTextures(1,&entry.name);
     gl::BindTexture(GL_TEXTURE_2D,entry.name);
     gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
-    gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,GL_BGRA,GL_UNSIGNED_BYTE,premultiplied.data());
+    std::vector<std::uint32_t> scratch;
+    gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,width,height,0,kUploadFormat,GL_UNSIGNED_BYTE,uploadOrder(premultiplied,scratch));
     // Mipmaps and anisotropic filtering for surfaces seen at grazing angles;
     // a provisional texture (upscaled in a later frame) has its level 0 only.
     gl::TexParameteri(GL_TEXTURE_2D,0x813d,mipmaps?1000:0); // GL_TEXTURE_MAX_LEVEL
@@ -902,7 +955,7 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
         gl::BindVertexArray(vertexArray_);gl::BindBuffer(GL_ARRAY_BUFFER,vertexBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER,vertices.size()*sizeof(GpuVertex),vertices.data(),GL_STREAM_DRAW);
         gl::Enable(GL_DEPTH_TEST);gl::Enable(GL_STENCIL_TEST);gl::ActiveTexture(GL_TEXTURE0);
-        for(unsigned plane=0;plane<4;++plane)gl::Enable(GL_CLIP_DISTANCE0+plane);
+        const int clipLocation=uniform(program_,"uClipEnabled");gl::Uniform1i(clipLocation,1);
         const bool blending=(options.displayControl&8)!=0;
         const int filter=settings.smoothTextures?GL_LINEAR:GL_NEAREST;
         std::size_t start=0;
@@ -956,7 +1009,7 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
             start=end;
         }
         gl::Disable(GL_BLEND);gl::Disable(GL_DEPTH_TEST);gl::Disable(GL_STENCIL_TEST);
-        for(unsigned plane=0;plane<4;++plane)gl::Disable(GL_CLIP_DISTANCE0+plane);
+        gl::Uniform1i(clipLocation,0);
         gl::DepthMask(GL_TRUE);gl::StencilMask(0xff);gl::ColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
     }
     gpuCheckpoint("gpu-scene");
@@ -1009,7 +1062,7 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     std::vector<std::uint32_t> raw(256*192);
     gl::PixelStorei(GL_PACK_ALIGNMENT,4);
     key&=1;
-    if(immediate||!readPending_[key]) gl::ReadPixels(0,0,256,192,GL_BGRA,GL_UNSIGNED_BYTE,raw.data());
+    if(immediate||!readPending_[key]) gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,raw.data());
     if(immediate) readPending_[key]=false;
     else {
         if(!readBuffers_[0]) {
@@ -1022,11 +1075,11 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
         // Each key (screen) collects what its previous call queued, then queues this frame.
         gl::BindBuffer(GL_PIXEL_PACK_BUFFER,readBuffers_[key]);
         if(readPending_[key]) {
-            if(const auto* mapped=static_cast<const std::uint32_t*>(gl::MapBuffer(GL_PIXEL_PACK_BUFFER,GL_READ_ONLY))) {
+            if(const auto* mapped=static_cast<const std::uint32_t*>(gl::MapBufferRange(GL_PIXEL_PACK_BUFFER,0,raw.size()*4,GL_MAP_READ_BIT))) {
                 std::copy_n(mapped,raw.size(),raw.data());gl::UnmapBuffer(GL_PIXEL_PACK_BUFFER);
             }
         }
-        gl::ReadPixels(0,0,256,192,GL_BGRA,GL_UNSIGNED_BYTE,nullptr);
+        gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,nullptr);
         gl::BindBuffer(GL_PIXEL_PACK_BUFFER,0);
         readPending_[key]=true;
     }
@@ -1034,7 +1087,7 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     for(unsigned y=0;y<192;++y)for(unsigned x=0;x<256;++x) {
         const auto p=raw[(191-y)*256+x],a=p>>24;
         auto channel=[&](unsigned shift){return a?std::min(255u,(((p>>shift)&255)*255+a/2)/a):0u;};
-        pixels[y*256+x]=(a<<24)|(channel(16)<<16)|(channel(8)<<8)|channel(0);
+        pixels[y*256+x]=(a<<24)|(channel(kShiftR)<<16)|(channel(kShiftG)<<8)|channel(kShiftB);
     }
 }
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
@@ -1043,7 +1096,9 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
     for(unsigned plane=0;plane<4;++plane) {
         gl::BindTexture(GL_TEXTURE_2D,recipeTextures_[plane]);
         gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
-        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,GpuLayout::recipeRows,GL_BGRA,GL_UNSIGNED_BYTE,recipes.data()+plane*std::size_t(256)*GpuLayout::recipeRows);
+        std::vector<std::uint32_t> scratch;
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,GpuLayout::recipeRows,kUploadFormat,GL_UNSIGNED_BYTE,
+            uploadOrder(std::span<const std::uint32_t>(recipes.data()+plane*std::size_t(256)*GpuLayout::recipeRows,std::size_t(256)*GpuLayout::recipeRows),scratch));
     }
     std::optional<ProfileScope> stage(std::in_place,"present-upload");
     for(auto& upload:takeHdUploads()) {
@@ -1055,8 +1110,9 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
             p=(a<<24)|(channel(16)<<16)|(channel(8)<<8)|channel(0);
         }
         gl::BindTexture(GL_TEXTURE_2D,hdAtlas_);gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
+        std::vector<std::uint32_t> scratch;
         gl::TexSubImage2D(GL_TEXTURE_2D,0,(upload.cell%hdAtlasCells)*hdCellSize,(upload.cell/hdAtlasCells)*hdCellSize,
-            hdCellSize,hdCellSize,GL_BGRA,GL_UNSIGNED_BYTE,pixels.data());
+            hdCellSize,hdCellSize,kUploadFormat,GL_UNSIGNED_BYTE,uploadOrder(pixels,scratch));
     }
     if(layout.sides) {
         // Per row, the column whose 3D effects continue beside the screens: the
@@ -1136,9 +1192,14 @@ std::vector<std::uint32_t> GpuRenderer::readPresented(int& width,int& height) {
     width=output_.width;height=output_.height;
     std::vector<std::uint32_t> raw(std::size_t(width)*height),pixels(raw.size());
     gl::BindFramebuffer(GL_FRAMEBUFFER,output_.framebuffer);gl::PixelStorei(GL_PACK_ALIGNMENT,4);
-    gl::ReadPixels(0,0,width,height,GL_BGRA,GL_UNSIGNED_BYTE,raw.data());
+    gl::ReadPixels(0,0,width,height,kUploadFormat,GL_UNSIGNED_BYTE,raw.data());
     gl::BindFramebuffer(GL_FRAMEBUFFER,0);
     for(int row=0;row<height;++row)std::copy_n(raw.data()+std::size_t(height-1-row)*width,width,pixels.data()+std::size_t(row)*width);
+#ifdef __EMSCRIPTEN__
+    // The readback comes back in RGBA byte order; the caller wants the game's
+    // ARGB convention (SDL_PIXELFORMAT_ARGB8888).
+    for(auto& p:pixels) {const unsigned a=p>>24,r=p&255,g=(p>>8)&255,b=(p>>16)&255;p=(a<<24)|(r<<16)|(g<<8)|b;}
+#endif
     return pixels;
 }
 }

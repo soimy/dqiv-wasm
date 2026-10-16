@@ -2,8 +2,12 @@
 // OpenGL 3.3 core entry points resolved through SDL after a context is current.
 #include <SDL3/SDL_opengl.h>
 
+// glClearDepth used to be here. It is the one entry point in this list that is
+// not in GLES 3.0 (the ES name is glClearDepthf), nothing calls it, and load()
+// throws on any name SDL_GL_GetProcAddress cannot resolve — which on WebGL2 it
+// cannot. Dropping it keeps load() honest on both backends.
 #define DQIV_GL11_FUNCTIONS(X) \
-    X(Clear,glClear) X(ClearColor,glClearColor) X(ClearDepth,glClearDepth) X(ClearStencil,glClearStencil) \
+    X(Clear,glClear) X(ClearColor,glClearColor) X(ClearStencil,glClearStencil) \
     X(Viewport,glViewport) X(Enable,glEnable) X(Disable,glDisable) X(BlendFunc,glBlendFunc) \
     X(DepthFunc,glDepthFunc) X(DepthMask,glDepthMask) X(StencilFunc,glStencilFunc) X(StencilOp,glStencilOp) \
     X(StencilMask,glStencilMask) X(ColorMask,glColorMask) X(TexParameteri,glTexParameteri) \
@@ -20,7 +24,6 @@
     X(LinkProgram,PFNGLLINKPROGRAMPROC,glLinkProgram) X(GetProgramiv,PFNGLGETPROGRAMIVPROC,glGetProgramiv) \
     X(GetProgramInfoLog,PFNGLGETPROGRAMINFOLOGPROC,glGetProgramInfoLog) X(UseProgram,PFNGLUSEPROGRAMPROC,glUseProgram) \
     X(DeleteProgram,PFNGLDELETEPROGRAMPROC,glDeleteProgram) X(BindAttribLocation,PFNGLBINDATTRIBLOCATIONPROC,glBindAttribLocation) \
-    X(BindFragDataLocation,PFNGLBINDFRAGDATALOCATIONPROC,glBindFragDataLocation) \
     X(GetUniformLocation,PFNGLGETUNIFORMLOCATIONPROC,glGetUniformLocation) X(Uniform1i,PFNGLUNIFORM1IPROC,glUniform1i) \
     X(Uniform1f,PFNGLUNIFORM1FPROC,glUniform1f) X(Uniform2f,PFNGLUNIFORM2FPROC,glUniform2f) \
     X(Uniform4f,PFNGLUNIFORM4FPROC,glUniform4f) X(Uniform1fv,PFNGLUNIFORM1FVPROC,glUniform1fv) \
@@ -39,11 +42,20 @@
     X(BlitFramebuffer,PFNGLBLITFRAMEBUFFERPROC,glBlitFramebuffer) X(ActiveTexture,PFNGLACTIVETEXTUREPROC,glActiveTexture) \
     X(BlendFuncSeparate,PFNGLBLENDFUNCSEPARATEPROC,glBlendFuncSeparate) X(GenerateMipmap,PFNGLGENERATEMIPMAPPROC,glGenerateMipmap) \
     X(ClearBufferfv,PFNGLCLEARBUFFERFVPROC,glClearBufferfv) X(ClearBufferfi,PFNGLCLEARBUFFERFIPROC,glClearBufferfi) \
-    X(MapBuffer,PFNGLMAPBUFFERPROC,glMapBuffer) X(UnmapBuffer,PFNGLUNMAPBUFFERPROC,glUnmapBuffer) \
+    X(MapBufferRange,PFNGLMAPBUFFERRANGEPROC,glMapBufferRange) X(UnmapBuffer,PFNGLUNMAPBUFFERPROC,glUnmapBuffer) \
     X(GenQueries,PFNGLGENQUERIESPROC,glGenQueries) X(DeleteQueries,PFNGLDELETEQUERIESPROC,glDeleteQueries) \
     X(BeginQuery,PFNGLBEGINQUERYPROC,glBeginQuery) X(EndQuery,PFNGLENDQUERYPROC,glEndQuery) \
-    X(GetQueryObjectiv,PFNGLGETQUERYOBJECTIVPROC,glGetQueryObjectiv) \
+    X(GetQueryObjectuiv,PFNGLGETQUERYOBJECTUIVPROC,glGetQueryObjectuiv)
+
+// Not in GLES 3.0, so load() must not try to resolve them on WebGL2: it throws
+// on any name SDL_GL_GetProcAddress cannot answer. Both are used only by the
+// GPU-timing path, which a wasm build does not compile.
+#ifndef __EMSCRIPTEN__
+#define DQIV_GL_DESKTOP_FUNCTIONS(X) \
     X(GetQueryObjectui64v,PFNGLGETQUERYOBJECTUI64VPROC,glGetQueryObjectui64v)
+#else
+#define DQIV_GL_DESKTOP_FUNCTIONS(X)
+#endif
 
 namespace pc::gl {
 #define DQIV_GL11_DECLARE(name,symbol) extern decltype(&::symbol) name;
