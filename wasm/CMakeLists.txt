@@ -6,11 +6,12 @@
 # registered once. What stays here is what genuinely differs: the compiler
 # flags, the SDL wiring, and the portable stand-in for the Windows-only files.
 #
-# What this build does NOT do yet (see docs/porting/02-FINDINGS.md):
-#   * no renderer: native/GameWindow.cpp, GpuRenderer.cpp, GlLoader.cpp,
-#     TextCanvas.cpp, FramePresenter.cpp, NitroSymbols.cpp, DssRuntime.cpp and
-#     GameBoot.cpp are the platform layer and still assume a desktop GL 3.3
-#     window. Only the libraries and a probe executable are built here.
+# What this build does NOT do yet (see docs/porting/03-ROADMAP.md):
+#   * no title screen: GameBoot::openResources() needs
+#     data/SOUND/sound_data.sdat, so the game stops before it can draw a picture,
+#     and that is M5. What is here is the pipeline running on a real GLES 3.0
+#     context, plus src/gpu-selfcheck.cpp, which puts known answers through the
+#     real shaders and prints what comes back.
 #   * no DS overlay section bracketing: cmake/NativeOverlays.cmake injects MSVC
 #     #pragma init_seg/data_seg/bss_seg through /FI. The game compiles without it,
 #     but the runtime snapshot/restore of overlay modules is not wired up yet.
@@ -18,6 +19,9 @@
 #     are Windows-only upstream and are replaced by src/port-stubs.cpp
 #     (native/DssRuntime.cpp, in the upstream exe target, turned out to be fully
 #     portable and is compiled for real here).
+#   * TextCanvas has no rasterizer on wasm, so the FPS overlay keeps its
+#     rectangle and loses its text. autoQuality is a no-op here for the same kind
+#     of reason: the GPU-timing path that drives it is compiled out.
 cmake_minimum_required(VERSION 3.24)
 project(DQIV_WASM LANGUAGES C CXX)
 
@@ -105,24 +109,24 @@ target_link_libraries(dqiv_wasm_spike PRIVATE
 add_executable(dqiv_layout_probe src/layout-probe.cpp)
 target_link_libraries(dqiv_layout_probe PRIVATE dqiv_core)
 
-# The real game, cross-built for wasm32. This is the first time the platform
-# layer is compiled by anything other than MSVC, so it is the gate for all of the
-# renderer work. It does not link yet, so it is kept out of the default build and
-# built by hand until the gap closes. What is still missing, as the linker said:
-#   func_020787c4, OS_WakeupThreadDirect, OS_InitMutex - all three live in
-#   native/NitroThreads.cpp, Windows-only upstream, and the caller is
-#   game/libs/NitroSystem/src/snd/snd_arcstrm.c. So this is the audio streaming
-#   thread: a real thread that gets created and waited on, not something a
-#   no-op stand-in can honestly cover.
-add_executable(dqiv_wasm_game EXCLUDE_FROM_ALL
+# The real game, cross-built for wasm32. It links and it runs: in node it gets
+# through the whole decompiled startup and stops where the desktop path would
+# need a GL context, which is exactly the point a browser takes over.
+add_executable(dqiv_wasm_game
     ${DQIV_ROOT}/native/GameBoot.cpp ${DQIV_ROOT}/native/GameWindow.cpp
     ${DQIV_ROOT}/native/GpuRenderer.cpp ${DQIV_ROOT}/native/GlLoader.cpp
     ${DQIV_ROOT}/native/TextCanvas.cpp ${DQIV_ROOT}/native/FramePresenter.cpp
     ${DQIV_ROOT}/native/NitroSymbols.cpp ${DQIV_ROOT}/native/CrashHandler.cpp
-    ${DQIV_ROOT}/native/InputBindings.cpp ${DQIV_ROOT}/native/AudioOutput.cpp)
+    ${DQIV_ROOT}/native/InputBindings.cpp ${DQIV_ROOT}/native/AudioOutput.cpp
+    src/gpu-selfcheck.cpp)
 target_link_libraries(dqiv_wasm_game PRIVATE
     dqiv_game dqiv_nitro_system dqiv_sound dqiv_platform dqiv_portable)
 # Emscripten turns off exception catching by default, so a throw that a try/catch
 # should have caught aborts instead, and the message is lost. GameBoot reports its
 # failures through an exception, so catching has to be on for this target.
-target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0)
+#
+# MAX_WEBGL_VERSION has to be asked for. It defaults to 1, and SDL's emscripten
+# driver only raises the context to WebGL 2 when the requested GL major version is
+# 3 (which is what GameWindow now asks for), so without this the shaders - every
+# one of them #version 300 es - would be compiled against GLES 2.0 and fail.
+target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2)

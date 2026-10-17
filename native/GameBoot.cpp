@@ -36,6 +36,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance=1;
 // make here, so the two symbols simply do not exist on wasm. This is also where
 // the main loop comes from, since main() cannot block here.
 #include <emscripten/emscripten.h>
+// Defined in wasm/src/gpu-selfcheck.cpp, which is not in cmake/Sources.cmake, so
+// the MSVC build neither sees the call nor the definition.
+namespace pc {void gpuSelfCheck(GameWindow&,GxTextures&);}
 #endif
 extern "C" {
 #include <nitro/os/thread.h>
@@ -139,6 +142,11 @@ struct GameRun {
         pc::dualScreen().unified=true;
         pc::dualScreen().canvasWidth=384*16/9.f;
         window.applySettings();
+#ifdef __EMSCRIPTEN__
+        // The first thing drawn on a real GPU, put through the real shaders with
+        // answers we already know. See wasm/src/gpu-selfcheck.cpp.
+        gpuSelfCheck(window,textures);
+#endif
         if(!overlays.load(38)) throw std::runtime_error("Cannot construct main game module");
         pc::setFrameCallback([this] {
             pc::ProfileScope frameTiming("render-callback");

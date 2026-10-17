@@ -74,7 +74,21 @@ void GameWindow::applySettings() {
     settingsUsed_=true;
     if(!s.fullscreen) {
         setFullscreen(false);
-        SDL_SetWindowSize(window_,windowSizes[s.windowSize][0],windowSizes[s.windowSize][1]);
+        int width=windowSizes[s.windowSize][0],height=windowSizes[s.windowSize][1];
+#ifdef __EMSCRIPTEN__
+        // A browser cannot have a window bigger than the page it is on, so a
+        // preset that does not fit is clamped to what the page can show. The
+        // canvas is sized by CSS here, and SDL reads that size back at creation
+        // (device->GetWindowSizeInPixels is logical size x devicePixelRatio), so
+        // the canvas follows the page and the drawing buffer follows the canvas.
+        SDL_Rect bounds;
+        if(SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window_),&bounds)&&bounds.w>0&&bounds.h>0) {
+            width=std::min(width,bounds.w);height=std::min(height,bounds.h);
+        }
+        // SDL_SetWindowPosition is not implemented by the emscripten driver, so
+        // centring is done by the page's CSS and this call does nothing.
+#endif
+        SDL_SetWindowSize(window_,width,height);
         SDL_SetWindowPosition(window_,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED);
     } else setFullscreen(true);
     if(!s.vsync)SDL_GL_SetSwapInterval(0);

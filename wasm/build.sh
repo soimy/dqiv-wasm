@@ -23,3 +23,9 @@ echo
 echo "built:  wasm/build/dqiv_wasm_spike.wasm"
 echo "run:    node wasm/build/dqiv_wasm_spike.js"
 echo "probe:  node wasm/build/dqiv_layout_probe.js"
+echo
+echo "game:   wasm/build/dqiv_wasm_game.wasm + .js, opened through wasm/index.html"
+echo "        serve the build directory over http (the .wasm is fetched, not embedded):"
+echo "        cd wasm/build && python3 -m http.server"
+echo "        node cannot run it - there is no WebGL in node, so it stops at the"
+echo "        GL context, which is the point a browser takes over."

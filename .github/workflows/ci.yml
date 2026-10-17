@@ -37,7 +37,8 @@ jobs:
   # Emscripten is pinned to the release the port was verified against.
   wasm:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The whole decompiled game plus the platform layer, then a 23 MB wasm link.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install emsdk
@@ -73,3 +74,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y glslang-tools
           python3 wasm/check-shaders.py
+      - name: Check the real game gets through startup to the GL boundary
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          # node has no WebGL, so the game stops at the GL context and node exits
+          # non-zero on the uncaught exception. That is the furthest it can go
+          # without a browser, and it is still the whole decompiled startup
+          # running: every overlay, the display plugin, the sound system.
+          out=$(node wasm/build/dqiv_wasm_game.js 2>&1 || true)
+          echo "$out" | grep -q 'std::runtime_error: No native video context is active'
+          echo "$out" | grep -q 'UnkDisplay::UnkDisplay'

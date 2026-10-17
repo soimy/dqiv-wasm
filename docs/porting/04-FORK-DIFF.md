@@ -38,20 +38,46 @@ Windows 侧的**行为**逐条验过：两个平台各配置一次、和 HEAD �
 `dqiv_sound` 那处改动值得单独说明：`gameOverlayImages()` 只在 `GameBoot.cpp`（exe 目标）里被引用，
 `NitroOverlays.cpp` 不引用它，所以统一链接目标不会引入新的未定义符号。
 
+## 源码改动（M2 之后，Windows 行为不变，除一处有意的）
+
+| 文件 | 改动 | 原因 |
+| --- | --- | --- |
+| `native/GlLoader.hpp`/`.cpp` | 5 个入口点从表里拿掉（`glClearDepth`、`glBindFragDataLocation`、`glMapBuffer`→`MapBufferRange`、`GetQueryObjectiv`→`GetQueryObjectuiv`）；`GetQueryObjectui64v` 移到 `DQIV_GL_DESKTOP_FUNCTIONS` 条件段，**在 .cpp 的 define+load 和 header 的 declare 两处都要调用**（漏了 header 那次就是 CI 上那次 `C2039`） | 按 GLES 3.0 逐个核过；`load()` 缺一即抛，所以表必须正好是 GLES 3.0 有的 |
+| `native/PixelOrder.hpp`（新增） | `kShiftR/G/B`、`uploadOrder()`、`fromReadback()` | WebGL2 的上传和回读都没有 BGRA 格式。放在 header 里是因为 layout probe 要在没有 GL context 的情况下把这个往返钉死 |
+| `native/GpuRenderer.cpp` | `DQIV_GLSL_HEADER` 宏（ES 侧多两行精度限定符，外加 `precision highp isampler2D`——ES 里整型 sampler **没有默认精度**）；`gl_ClipDistance` → varying + `uClipEnabled` + `discard`；`kUploadFormat` wasm 上 `GL_RGBA`；GPU 计时 `#ifdef` 隔离 | **这是 Windows 侧唯一一处行为改动，是有意的**：ES 3.00 唯一缺的就是 `gl_ClipDistance`，硬件内建的插值规范明说 implementation-dependent，varying 是透视正确的 |
+| `native/TextCanvas.cpp/.hpp` | `windows.h`、GDI 构造/析构、`text()` 全部 `#ifdef` 包起来 | 只用来画 FPS 角标。wasm 上角标保留矩形、失去文字——诚实的最小实现 |
+| `native/CrashHandler.cpp` | `windows.h`/`dbghelp.h`/SEH 注册包起来；wasm 上 `trace()` 走 `emscripten_get_callstack(EM_LOG_C_STACK, …)` | `divideLikeTheDs`（DS 软件除法语义：`x/0` 得 `x`、`x%0` 得 `0`）是桌面专属；wasm 的整数除零是 trap，而且实例已经没了 |
+| `native/GameBoot.cpp` | `<share.h>`/`MessageBoxA`/`_fsopen`/`"NUL"`/NVIDIA-AMD dllexport 包起来；`main()` 拆成 `GameRun`，wasm 上 `emscripten_set_main_loop` | 一份定义、两个驱动。两处顺序变化写在 commit 里、没有糊过去：`overlays.load(38)` 现在在 `FramePresenter` 构造之后；`GameRun` 是 static local，成员在程序退出时析构 |
+| `native/GameWindow.cpp` | wasm 上请求 MINOR 0 + `SDL_GL_CONTEXT_PROFILE_ES`；`SDL_SavePNG` 走 `canvas.toDataURL()` + 下载链接；分辨率预设钳到屏幕可用区域 | WebGL2 就是 GLES 3.0——请求桌面 3.3 core 正是浏览器里建不出 context 的原因。笔记本上 2560x1440 会溢出页面 |
+| `native/NitroSymbols.cpp` | 两个 wrapper 恢复，**包在 `#ifdef _MSC_VER` 里** | MSVC 的 mangling 和 Itanium ABI 不同（`?unkfunc_02068ec8@@YAXH@Z` vs `_Z16unkfunc_02068ec8i`），所以 adapter 在 MSVC 上是必需的、在 wasm 上会撞名 |
+| `native/NitroThreads.hpp` | `runPortableThreads()`、`runIdle()` 加 `#ifdef __EMSCRIPTEN__` | 协作调度（用户选的路）：`OS_PauseThread` 就是帧边界，两行，不是调度器框架 |
+
+`wasm/check-shaders.py`（新增，可执行）：从 `native/GpuRenderer.cpp` 把 8 个 shader 抽出来，
+**两个 header 都从 `#define` 行读**（不是硬编码），写成 `.vert`/`.frag` 过 `glslangValidator`，
+不需要 profile 参数——它从 `#version` 行读 flavour、从扩展名读 stage。16/16 过。
+
+`wasm/src/gpu-selfcheck.cpp`（新增，只进 `dqiv_wasm_game`，所以 MSVC 看不到它、warning 分布不变）：
+字节序和 clip 的第一份真 GPU 证据，跑在真 context 上、答案是我们已经知道的。见路线图 M4 的验收。
+
+`wasm/index.html`（新增）：canvas 的 id 必须是 `#canvas`（SDL 的默认 selector），CSS 让它填满页面。
+页面把 stdout 镜像到底部——这环境里没有浏览器自动化，所以自检那行得靠人看。
+
 ## 新增目录（纯加法）
 
 | 路径 | 内容 |
 | --- | --- |
 | `cmake/Sources.cmake` | 共享源清单（见上） |
 | `.github/workflows/ci.yml` | 双平台 CI，守住"Windows 仍 0 error"这条验收 |
-| `wasm/` | Emscripten 交叉构建脚手架：`CMakeLists.txt`、`build.sh`、`README.md`、`src/`（可移植桩、spike main、布局探针） |
+| `wasm/` | Emscripten 交叉构建脚手架：`CMakeLists.txt`、`build.sh`、`README.md`、`check-shaders.py`、`index.html`、`src/`（可移植桩、spike main、布局探针、GPU 自检） |
 | `docs/porting/` | 本次会话的产物与经验：spike 报告、可移植性清单、路线图、本文件 |
 | `PORTING.md` | 根目录入口，指向 `docs/porting/` |
 | `.gitignore` | 追加 `/wasm/build/` |
 
 ## 未做的事（有意为之）
 
-- 没有实现渲染层、overlay 机制、资源管线。
+- overlay 机制（M3）和资源管线（M5）还没实现。渲染层已经能编、能链接、能在 node 里跑到底，
+  在浏览器里跑起来是 M4 的验收。`TextCanvas` 的文字、`autoQuality`、`divideLikeTheDs` 这三处
+  在 wasm 上是诚实的最小实现，不是"实现了"。
 - `native/SaveStore.cpp`、`NitroThreads.cpp`、`NitroIdentity.cpp` 仍保持上游的 Windows 实现，
   wasm 构建用 `wasm/src/port-stubs.cpp`（约 55 行）替代；
   `native/DssRuntime.cpp` 经复验是**完全可移植**的（只是上游把它放在 exe 目标里），wasm 构建直接编译它。

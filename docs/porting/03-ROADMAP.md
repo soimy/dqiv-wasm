@@ -73,22 +73,64 @@ checkout 跑 `build.sh`，spike 输出 `= 3`、四条布局断言全过。764 �
 - [x] 性能剖析路径（GPU 计时）用 `#ifdef` 隔离：`GL_TIME_ELAPSED` 不在 GLES 3.0 里。
       代价说清楚——`settings.autoQuality` 在 wasm 上会失效，直到接上
       `EXT_disjoint_timer_query_webgl2`。
-- [ ] Windows 依赖的 wasm 替身（实测这 4 个文件编不过）：`TextCanvas`（整套 GDI，只用来
+- [x] Windows 依赖的 wasm 替身（实测这 4 个文件编不过）：`TextCanvas`（整套 GDI，只用来
       画 FPS 角标）、`CrashHandler`（SEH/SymDB）、`GameBoot`（`windows.h`/`_fsopen`/
       `MessageBoxA`）、`GameWindow`（`SDL_SavePNG`，emscripten 的 SDL3 port 里没有；
-      建议走 `EM_ASM` 的 `canvas.toDataURL()`，顺带给 M4 留一个可验证的截图手段）
-- [ ] `GameWindow`：改为请求 GLES 3.0；Emscripten 下用 `emscripten_set_main_loop` 替代 Win32 消息循环
-- [ ] `FramePresenter` / `Display`：适配 canvas 尺寸、`devicePixelRatio`、resize 事件
-- [ ] `GameBoot` 需要 `gameOverlayImages()`，那是 M3 的 registry。本轮先用最小 stub
+      走 `emscripten_run_script` 的 `canvas.toDataURL()` + 下载链接，顺带留一个看画面的手段）
+- [x] `GameWindow`：改为请求 GLES 3.0；Emscripten 下用 `emscripten_set_main_loop` 替代 Win32 消息循环
+- [x] `FramePresenter` / `Display`：适配 canvas 尺寸、`devicePixelRatio`、resize 事件。
+      **这条几乎没有代码改动**——SDL3 3.2.4 的 emscripten driver 已经把四件事都实现了：
+      `GetWindowSizeInPixels` 返回 logical × DPR、`HIGH_PIXEL_DENSITY` 读 DPR、
+      `SetWindowSize` 设 canvas 元素尺寸和 CSS 尺寸并发 `RESIZED`、全屏是真的 HTML5 全屏。
+      `GameWindow` 每帧重新读 drawable 尺寸，所以 resize 自动生效，不需要显式处理事件。
+      真正改的只有一处：wasm 上把分辨率预设钳到屏幕可用区域，否则笔记本上 2560x1440 会溢出页面。
+- [x] `GameBoot` 需要 `gameOverlayImages()`，那是 M3 的 registry。本轮先用最小 stub
       （构造自然跑，不做 snapshot/restore），M3 落地后重测标题画面
-- [ ] 用 `wasm/build.sh` 产出 `index.html` + `.wasm` + `.data`，浏览器里能看到**标题画面**
+- [x] `index.html`：canvas 的 id 必须是 `#canvas`（SDL 的默认 selector），CSS 让它填满页面，
+      SDL 就会拿 CSS 尺寸 × DPR 当绘制缓冲，并在窗口变化时发 resize。页面把 stdout 镜像到底部，
+      因为没有浏览器自动化，自检那行得靠人看。`.data` 还没有——那是 M5。
 
 **验收**（按实测拆开——标题画面归 M5，因为 `GameBoot::openResources()` 没有资产就直接抛）：
 浏览器里渲染管线真的跑起来——GLES 3.0 context、`emscripten_set_main_loop`、canvas 尺寸 /
-`devicePixelRatio` / resize，用测试图案验字节序和 clip，稳定 60 fps；
-`Settings > Display` 的分辨率与拉伸选项可用。
-不依赖浏览器的部分已经有机器门：8 个 shader 两个 profile 都过 glslang（`wasm/check-shaders.py`），
-字节序往返在 layout probe 里钉死。
+`devicePixelRatio` / resize，稳定 60 fps；`Settings > Display` 的分辨率与拉伸选项可用。
+
+字节序和 clip 的第一份真 GPU 证据走 `wasm/src/gpu-selfcheck.cpp`，它在 context 建好、
+`gl::load()` 成功之后跑一次，往控制台打两行：
+- **字节序**：4 个已知的 recipe 字进 plane 0，同一个字必须原样回来。这是整条路径——
+  `uploadOrder` → 上传 → ES compose shader → `ReadPixels` → `fromReadback`——端到端，不是其中某一环。
+- **clip**：一个三角形完全在屏幕内要画出来、完全在外要画不出来、跨边的要画出它的一部分。
+  说清楚它能证明什么、不能证明什么：w=1 时这四个 clip 值恰好就是 NDC，所以跨边的三角形两种实现
+  给出同一个答案。这个改动是为了**跨边时的确定性**（硬件内建的插值规范明说 implementation-dependent，
+  varying 是透视正确的），所以自检是"和桌面路径画一样的图"，不是"证明是 varying 起的作用"。
+
+不依赖浏览器的机器门：8 个 shader 两个 profile 都过 glslang（`wasm/check-shaders.py`）、字节序
+往返在 layout probe 里钉死、真游戏在 node 里跑到底并停在 GL 边界那一行
+（`std::runtime_error: No native video context is active`）——这条现在 CI 里守着，它证明整条
+decompiled 启动流程（每个 overlay、display plugin、sound system）都跑对了。
+
+**wasm 上已核实的 SDL3 / Emscripten 事实**（从 emsdk 里 SDL 3.2.4 的源码、emscripten 的
+`settings.js`、`library_pthread_stub.c` 和 musl patch 读出来的，不是推测）：
+
+- `MAX_WEBGL_VERSION` 默认是 **1**。SDL 的 driver 只在请求的 GL 主版本是 3 时才把 context 升到
+  WebGL 2，所以 `-sMAX_WEBGL_VERSION=2` 必须显式加，否则 8 个 `#version 300 es` 全挂。
+  `dqiv_wasm_game` 的 link options 里加了。
+- `GL_ENABLE_GET_PROC_ADDRESS` 默认是 true，所以 `GlLoader` 走 `SDL_GL_GetProcAddress` 没问题。
+- `SDL_SetWindowPosition` 在 emscripten driver 的函数表里是**注释掉的** → no-op，居中靠 CSS。
+- `SDL_GL_SetSwapInterval(-1)`（adaptive，`applySettings` 先试的那个）在 emscripten 会失败，报
+  "Late swap tearing currently unsupported"；现有代码正好兜回 1。0 → `EM_TIMING_SETTIMEOUT`、
+  1 → `EM_TIMING_RAF`，所以 wasm 上真正的 pacer 是 RAF。
+- `SDL_SyncWindow` 在 emscripten 是 no-op（driver 没有 `SyncWindow`）。
+- **`SDL_DelayPrecise` 在没有 pthreads 时是忙等**：`library_pthread_stub.c` 里
+  `emscripten_thread_sleep` 是个 spin loop。协作调度（无 SharedArrayBuffer、无 COOP/COEP）
+  意味着这条对我们是生效的——`pace()` 里的等待在浏览器里是烧 CPU，不是睡觉。
+- `interpolating()` 在 wasm 上基本不触发：emscripten 的 display mode `refresh_rate` 是 0，
+  `> 61` 恒假。所以 120/144/165/240 这些帧率设置在浏览器里被显示器刷新率封顶。
+
+**链接期签名不匹配：13 个，其中 7 个在 spike 里就有。** 全是反编译源码里同一个函数在不同 TU 被
+猜成不同签名（`void` vs `i32` 返回、`(i32)` vs `(i32,i32)`）。MSVC 上同样的不匹配是**静默**的
+（C 语言不同 TU 之间不检查），wasm 只是把它说出来。新增的 6 个全在声音系统里
+（`UnkSoundSystem.cpp` / `snd_arcplayer` / `snd_arcstrm` / `snd_player` / `snd_bank`）。wasm-ld
+会插 thunk 适配所以能链接，但返回类型和参数个数不一致的那些是真实的正确性风险，M3/M6 里要逐个看。
 
 ## M4b [可选] WebGPU 后端（不排期，等 M4 验收过了再量）
 

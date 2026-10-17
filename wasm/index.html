@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Dragon Quest IV - wasm</title>
+<style>
+  html,body{height:100%;margin:0;background:#111;color:#ddd;overflow:hidden;
+    font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+  /* SDL's emscripten driver reads the canvas's CSS size at creation and, if CSS
+     is sizing it, uses that for the drawing buffer (times devicePixelRatio) and
+     sends a resize event when it changes. So filling the page here is what makes
+     browser resize drive the game, rather than the other way round. */
+  #wrap{position:absolute;inset:0}
+  canvas{width:100%;height:100%;display:block;background:#000}
+  /* Once SDL sets a window size from the settings menu it takes over the canvas's
+     CSS size, so the preset wins from then on; native/GameWindow.cpp clamps it to
+     what the page can show. */
+  #log{position:absolute;left:0;bottom:0;max-height:22%;overflow:auto;padding:6px;
+    white-space:pre-wrap;background:rgba(0,0,0,.55);pointer-events:none}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="canvas" tabindex="0"></canvas></div>
+<div id="log"></div>
+<script>
+// There is no browser automation in this project, so the self-check has to be
+// readable by someone looking at the window. Mirror stdout onto the page; the
+// console gets the same lines.
+(function(){
+  const log=document.getElementById('log');
+  const show=s=>{log.textContent+=s+'\n';log.scrollTop=log.scrollHeight;};
+  const orig=console.log;
+  console.log=function(...a){orig.apply(console,a);show(a.map(String).join(' '));};
+  window.addEventListener('error',e=>show('error: '+(e.message||e.type)));
+  show('serving over http, canvas id="canvas" (SDL\'s default selector).');
+})();
+</script>
+<script async src="dqiv_wasm_game.js"></script>
+</body>
+</html>
