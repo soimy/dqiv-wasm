@@ -77,10 +77,14 @@ jobs:
       - name: Check the real game gets through startup to the GL boundary
         run: |
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
-          # node has no WebGL, so the game stops at the GL context and node exits
-          # non-zero on the uncaught exception. That is the furthest it can go
-          # without a browser, and it is still the whole decompiled startup
-          # running: every overlay, the display plugin, the sound system.
+          # What node can actually prove, measured rather than assumed. It has no
+          # window and no WebGL, so it stops inside SDL video init and exits
+          # non-zero on the uncaught exception. Reaching SDL_VideoInit is the
+          # point: GameWindow gets there through openResources(), so this step
+          # proves the static-init order holds and the startup runs. It cannot
+          # prove anything past the GL boundary - that needs a real browser, and
+          # the self-check's answers (byte order, clip) live in the browser.
           out=$(node wasm/build/dqiv_wasm_game.js 2>&1 || true)
-          echo "$out" | grep -q 'std::runtime_error: No native video context is active'
-          echo "$out" | grep -q 'UnkDisplay::UnkDisplay'
+          echo "$out" | grep -q 'SDL_VideoInit'
+          echo "$out" | grep -q 'Emscripten_CreateDevice'
+          echo "$out" | grep -q 'window is not defined'

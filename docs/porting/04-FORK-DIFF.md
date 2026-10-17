@@ -51,16 +51,27 @@ Windows 侧的**行为**逐条验过：两个平台各配置一次、和 HEAD �
 | `native/GameWindow.cpp` | wasm 上请求 MINOR 0 + `SDL_GL_CONTEXT_PROFILE_ES`；`SDL_SavePNG` 走 `canvas.toDataURL()` + 下载链接；分辨率预设钳到屏幕可用区域 | WebGL2 就是 GLES 3.0——请求桌面 3.3 core 正是浏览器里建不出 context 的原因。笔记本上 2560x1440 会溢出页面 |
 | `native/NitroSymbols.cpp` | 两个 wrapper 恢复，**包在 `#ifdef _MSC_VER` 里** | MSVC 的 mangling 和 Itanium ABI 不同（`?unkfunc_02068ec8@@YAXH@Z` vs `_Z16unkfunc_02068ec8i`），所以 adapter 在 MSVC 上是必需的、在 wasm 上会撞名 |
 | `native/NitroThreads.hpp` | `runPortableThreads()`、`runIdle()` 加 `#ifdef __EMSCRIPTEN__` | 协作调度（用户选的路）：`OS_PauseThread` 就是帧边界，两行，不是调度器框架 |
+| `native/GlLoader.hpp` | `MapBufferRange`/`UnmapBuffer` 移进 `DQIV_GL_DESKTOP_FUNCTIONS`（wasm 上为空） | Emscripten **实现了** `glMapBufferRange` 但**直接拒绝 `MAP_READ`**（`libwebgl.js`：`access does not support MAP_READ or MAP_UNSYNCHRONIZED`），而 `glGetBufferSubData` 根本没实现。机器核对：52 个入口里**正好这两个**在生成的 JS 里缺席 |
+| `native/GpuRenderer.cpp`（M3a 期间） | `readNative` 开头 wasm 强制 `immediate=true`；`MapBufferRange` 调用点 `#ifndef __EMSCRIPTEN__`；**`BindTexture` 改成无条件**；`DQIV_TRACE` 逐句报 GL 错误（桌面空宏） | 异步 readback 在 wasm 上没有"读"这一半，所以每次读都是直读——双缓冲买到的流水线（上一帧的读和这一帧的画重叠）在这里没了，说清楚而不是糊过去。**无条件绑定是真 bug 修复**：无纹理 batch 会沿用上一个 cycle 留在单元 0 上的东西，而 `readNative` 在那儿留的是挂在 framebuffer 上的纹理，所以第二次画是反馈环 → `GL_INVALID_OPERATION`。不修的话卡的是帧循环 |
+| `native/AssetPack.cpp` | `executablePath()` 加 `#elif defined(__EMSCRIPTEN__)` 返回 `/` | `read_symlink("/proc/self/exe")` 在 node 和 Chrome 里**都**抛（实测） |
+| `native/GameBoot.cpp`（M3a 期间） | wasm 上 `openResources()` 允许空 asset pack（Windows 保持抛）；`early-*` 上下文以引用接进 `GameRun` | 让浏览器跑能过这一关，资产在 M5 由用户自己的 ROM 提供 |
+| `wasm/src/early-contexts.cpp`（新增） | `gameOverlayImages()` 在**全局作用域**声明（和 `GameBoot.cpp` 一致），`namespace pc` 里定义 `earlySavePath`/`earlyIdentityPath`/`earlyIdentity`/`earlyVideo`/`earlyPower`/`earlyOverlays` | M3a 的机制：clang 在一个 target 内按源文件顺序发静态初始化器，且 exe 的 object 先于 library 的 object——两条都实测过。namespace-scope 的 `const` 在 C++ 里是**内部链接**，所以要 `extern` |
+| `wasm/CMakeLists.txt`（M3a 期间） | `-sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1` | 实测：heap 停在 18481152 字节、游戏在自己初始化的一个 `operator new` 上爆掉。代价是增长时复制整个 heap（一次停顿），起点拉高是为了少几次 |
 
 `wasm/check-shaders.py`（新增，可执行）：从 `native/GpuRenderer.cpp` 把 8 个 shader 抽出来，
 **两个 header 都从 `#define` 行读**（不是硬编码），写成 `.vert`/`.frag` 过 `glslangValidator`，
 不需要 profile 参数——它从 `#version` 行读 flavour、从扩展名读 stage。16/16 过。
 
 `wasm/src/gpu-selfcheck.cpp`（新增，只进 `dqiv_wasm_game`，所以 MSVC 看不到它、warning 分布不变）：
-字节序和 clip 的第一份真 GPU 证据，跑在真 context 上、答案是我们已经知道的。见路线图 M4 的验收。
+字节序和 clip 的第一份真 GPU 证据，跑在真浏览器（headless Chrome + CDP）上。字节序 `ok`；clip 的梯度
+`0→2436, 0.5→2436, 0.8→2289, 1.0→1218, 1.5→0`，两三角形一次画正好是两倍，交换实验也交换。
+自检的输出走 `journal.txt`（`main()` 把 stdout/stderr `freopen` 进去），所以它在浏览器的虚拟文件系统里、
+不在控制台——CDP 读 `/saves/journal.txt` 才看得到。
 
 `wasm/index.html`（新增）：canvas 的 id 必须是 `#canvas`（SDL 的默认 selector），CSS 让它填满页面。
-页面把 stdout 镜像到底部——这环境里没有浏览器自动化，所以自检那行得靠人看。
+页面把 stdout 镜像到底部。`--dump-dom` + `--virtual-time-budget` 在主循环跑起来之后会**挂住**，所以验证
+走 CDP over `--remote-debugging-port` 用真实时间；Node 22 有全局 `fetch`/`WebSocket`，裸 CDP 客户端不需要
+驱动库。`Page.addScriptToEvaluateOnNewDocument` 装 handler（在任何页面脚本之前），因为导航会清掉 `window`。
 
 ## 新增目录（纯加法）
 

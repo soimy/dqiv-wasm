@@ -48,13 +48,19 @@ checkout 跑 `build.sh`，spike 输出 `= 3`、四条布局断言全过。764 �
 
 ## M3 DS overlay 机制的可移植实现（3–5 天，需要设计）
 
-目前缺失：overlay 模块与其可写数据段的边界符号在 Clang/wasm 上没有生成，导致运行时无法按 DS 语义
-快照/恢复每个 overlay 的数据段。做法见 `02-FINDINGS.md` 第 7 节。
+**M3a 已落地（实测）**：静态初始化顺序。MSVC 给每个 `/main/` 源文件一个 `init_seg` 头，抑制 CRT
+启动构造，所以游戏的全局 ctor 在 `main()` 里加载 overlay 38 时才跑，那时 `pc::NitroVideo` 已经存在。
+wasm 没有 `/FI` 也没有 `init_seg`，所以 `UnkDisplay` 的 ctor 在 `__wasm_call_ctors` 里先于 `main()`
+跑了，`pc::current` 是 null。clang 在 wasm 上真正给的杠杆只有两个（都实测过）：**链接顺序**决定静态
+初始化顺序（exe 的 object 先于 library 的 object），以及给单个全局变量加 `__attribute__((section))`
+确实能造出那个段。`#pragma init_seg/data_seg/bss_seg` 和 `init_priority` 在 clang/wasm 上**全部被忽略**
+（`-Wunknown-pragmas`、`-Wignored-attributes`），`__declspec(allocate)` 是 MSVC-only。所以 M3a 用链接顺序。
 
-- [ ] 用 `__attribute__((section(...)))` + 显式边界符号替代 `#pragma data_seg/bss_seg` + `.d$NNa`/`.d$NNz` 段排序
-      （`wasm-ld` 没有 ELF 的 `__start_/__stop_`，边界符号必须由生成器显式写出）
-- [ ] 用 `__attribute__((constructor(priority)))` + 自己实现 `__cxa_atexit` 接管析构注册，
-      替代 `#pragma init_seg(".i$NNm", pcOverlayExitNN)`
+**M3b（真 snapshot/restore）需要地址，所以选了两遍链接**：第一遍带 `--Map` 跑，读地址，用读到的地址
+生成表，再链接一遍。`wasm-ld` 有 `--Map=` ✓，没有段排序选项。
+
+- [x] M3a：用链接顺序把静态初始化顺序修对（`wasm/src/early-contexts.cpp`）
+- [ ] M3b：两遍链接拿到地址，生成真正的边界符号
 - [ ] 让 `dqiv_overlay_registry()` 的生成内容与 MSVC 路径并存（同一份 CMake 函数，按编译器分支）
 - [ ] 单元测试：连续 load/unload 两个 overlay，确认可写数据被正确恢复、析构被正确调用
 
@@ -130,7 +136,11 @@ decompiled 启动流程（每个 overlay、display plugin、sound system）都�
 猜成不同签名（`void` vs `i32` 返回、`(i32)` vs `(i32,i32)`）。MSVC 上同样的不匹配是**静默**的
 （C 语言不同 TU 之间不检查），wasm 只是把它说出来。新增的 6 个全在声音系统里
 （`UnkSoundSystem.cpp` / `snd_arcplayer` / `snd_arcstrm` / `snd_player` / `snd_bank`）。wasm-ld
-会插 thunk 适配所以能链接，但返回类型和参数个数不一致的那些是真实的正确性风险，M3/M6 里要逐个看。
+会插 thunk 适配所以能链接，但返回类型和参数个数不一致的那些**已经在执行路径上 trap 了**（实测）：
+浏览器里游戏打完自己那行 `Original application initialization`，下一个动作就是
+`RuntimeError: unreachable` at `signature_mismatch:func_02063920`（spike 里那 7 个之一），调用链是
+`unkfunc_0207e934` ← `UnkApplication::unkfunc_02057f8c(0)` ← `main()`。所以它不是"以后再看的风险"，
+是当前的挡路点，排在 M3b 前面。
 
 ## M4b [可选] WebGPU 后端（不排期，等 M4 验收过了再量）
 
@@ -222,10 +232,16 @@ M4 里顺手做的 4 个 hedge（成本几乎为零，让 M4b 不用返工）—
 
 ## 建议顺序
 
-`M2(✅) → M4 → M3 → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
-M4 先行的理由：它是唯一"看得见进展"的里程碑，也能尽早暴露渲染相关的隐藏假设。
-M2 必须先做的理由：M4 会往两边清单里加文件（`GlLoader`/`GpuRenderer`/`GameWindow`/
-`FramePresenter`/`Display`/`TextCanvas`/`GameBoot` 这 7 个现在都还进不了 wasm 清单）。
+`M2(✅) → M4(大部分✅) → M3a(✅) → 签名不匹配 → M3b → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
+
+**顺序改过两次，都是实测逼的，不是计划。** 第一次：静态初始化——MSVC 的 `init_seg` 头让游戏的
+全局 ctor 在 `main()` 里加载 overlay 38 时才跑，wasm 上没有这个机制，所以 M3 从"以后的里程碑"
+变成了浏览器路线的挡路项。第二次：那 13 个链接期签名不匹配**已经在执行路径上 trap 了**（实测，
+见下），所以它排在 M3b 前面。
+
+M4 先行的理由当时是：它是唯一"看得见进展"的里程碑，也能尽早暴露渲染相关的隐藏假设。它做到了——
+而且真的暴露了：一个渲染器真 bug（无纹理 batch 沿用上一个 cycle 留在纹理单元 0 上的绑定，而那是
+挂在 framebuffer 上的纹理，所以是反馈环）。这条不修的话卡的是帧循环，不只是自检。
 
 **2026-10 决定（已确认）**：目标定为**只要浏览器**。因此 GPU 走 **WebGL2**（M4 原样），
 WebGPU 降级为 M4b 不排期；M9/M10 归档——浏览器路线不用付 263 个指针字段的偏移化改造，
