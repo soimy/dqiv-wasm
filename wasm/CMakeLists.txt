@@ -112,7 +112,13 @@ target_link_libraries(dqiv_layout_probe PRIVATE dqiv_core)
 # The real game, cross-built for wasm32. It links and it runs: in node it gets
 # through the whole decompiled startup and stops where the desktop path would
 # need a GL context, which is exactly the point a browser takes over.
+# src/early-contexts.cpp goes first on purpose. Within a target clang emits static
+# initialisers in source order, and exe objects are linked before library objects,
+# so this file's constructors run before the game's own - both measured. It has to
+# be first because clang ignores #pragma init_seg, which on MSVC is what delays the
+# game's constructors until the overlay registry loads overlay 38.
 add_executable(dqiv_wasm_game
+    src/early-contexts.cpp
     ${DQIV_ROOT}/native/GameBoot.cpp ${DQIV_ROOT}/native/GameWindow.cpp
     ${DQIV_ROOT}/native/GpuRenderer.cpp ${DQIV_ROOT}/native/GlLoader.cpp
     ${DQIV_ROOT}/native/TextCanvas.cpp ${DQIV_ROOT}/native/FramePresenter.cpp
@@ -129,4 +135,12 @@ target_link_libraries(dqiv_wasm_game PRIVATE
 # driver only raises the context to WebGL 2 when the requested GL major version is
 # 3 (which is what GameWindow now asks for), so without this the shaders - every
 # one of them #version 300 es - would be compiled against GLES 2.0 and fail.
-target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2)
+#
+# Memory. Measured: the game ran out during its own initialisation, at an operator
+# new, with the heap at 18481152 bytes - that is what Emscripten worked out for
+# itself from the static data, and it is not enough. Growth is the practical answer
+# for a game that allocates as it goes. The cost is stated: growing copies the whole
+# heap, so it is a pause, and the starting figure is raised so there are fewer of
+# them rather than one big one at the worst moment.
+target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2
+    -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1)

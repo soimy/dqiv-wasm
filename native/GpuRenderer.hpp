@@ -8,6 +8,11 @@
 #include <vector>
 
 namespace pc {
+#ifdef __EMSCRIPTEN__
+// On, the self-check turns it on. Reports a GL error at the call that left it
+// behind, not at the end of the cycle.
+extern bool gpuTrace;
+#endif
 using GpuMatrix=std::array<float,16>; // row-major, applied to column vectors
 GpuMatrix gpuIdentity();
 GpuMatrix gpuMultiply(const GpuMatrix&,const GpuMatrix&);

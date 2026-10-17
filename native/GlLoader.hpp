@@ -42,17 +42,26 @@
     X(BlitFramebuffer,PFNGLBLITFRAMEBUFFERPROC,glBlitFramebuffer) X(ActiveTexture,PFNGLACTIVETEXTUREPROC,glActiveTexture) \
     X(BlendFuncSeparate,PFNGLBLENDFUNCSEPARATEPROC,glBlendFuncSeparate) X(GenerateMipmap,PFNGLGENERATEMIPMAPPROC,glGenerateMipmap) \
     X(ClearBufferfv,PFNGLCLEARBUFFERFVPROC,glClearBufferfv) X(ClearBufferfi,PFNGLCLEARBUFFERFIPROC,glClearBufferfi) \
-    X(MapBufferRange,PFNGLMAPBUFFERRANGEPROC,glMapBufferRange) X(UnmapBuffer,PFNGLUNMAPBUFFERPROC,glUnmapBuffer) \
     X(GenQueries,PFNGLGENQUERIESPROC,glGenQueries) X(DeleteQueries,PFNGLDELETEQUERIESPROC,glDeleteQueries) \
     X(BeginQuery,PFNGLBEGINQUERYPROC,glBeginQuery) X(EndQuery,PFNGLENDQUERYPROC,glEndQuery) \
     X(GetQueryObjectuiv,PFNGLGETQUERYOBJECTUIVPROC,glGetQueryObjectuiv)
 
-// Not in GLES 3.0, so load() must not try to resolve them on WebGL2: it throws
-// on any name SDL_GL_GetProcAddress cannot answer. Both are used only by the
+// Not in GLES 3.0, or not usable on WebGL2, so load() must not try to resolve
+// them there: it throws on any name SDL_GL_GetProcAddress cannot answer.
+//
+// glGetQueryObjectui64v is not in GLES 3.0 at all. It is used only by the
 // GPU-timing path, which a wasm build does not compile.
+//
+// glMapBufferRange is in GLES 3.0 and Emscripten does implement it, but it
+// rejects MAP_READ outright - "access does not support MAP_READ" - so the async
+// readback it drives has no read side on WebGL2. Measured against the build:
+// these are the only two entry points in this table that are absent from the
+// generated JS. glGetBufferSubData, the usual fallback, is not implemented
+// either. So on wasm every read is a direct one; see GpuRenderer::readNative.
 #ifndef __EMSCRIPTEN__
 #define DQIV_GL_DESKTOP_FUNCTIONS(X) \
-    X(GetQueryObjectui64v,PFNGLGETQUERYOBJECTUI64VPROC,glGetQueryObjectui64v)
+    X(GetQueryObjectui64v,PFNGLGETQUERYOBJECTUI64VPROC,glGetQueryObjectui64v) \
+    X(MapBufferRange,PFNGLMAPBUFFERRANGEPROC,glMapBufferRange) X(UnmapBuffer,PFNGLUNMAPBUFFERPROC,glUnmapBuffer)
 #else
 #define DQIV_GL_DESKTOP_FUNCTIONS(X)
 #endif

@@ -24,16 +24,26 @@
 <div id="wrap"><canvas id="canvas" tabindex="0"></canvas></div>
 <div id="log"></div>
 <script>
-// There is no browser automation in this project, so the self-check has to be
-// readable by someone looking at the window. Mirror stdout onto the page; the
-// console gets the same lines.
+// Mirror stdout, stderr and the console onto the page. The game reports its
+// failures through std::cerr, which lands on console.error, so hooking only
+// console.log would have shown a black screen and nothing else.
 (function(){
   const log=document.getElementById('log');
-  const show=s=>{log.textContent+=s+'\n';log.scrollTop=log.scrollHeight;};
-  const orig=console.log;
-  console.log=function(...a){orig.apply(console,a);show(a.map(String).join(' '));};
-  window.addEventListener('error',e=>show('error: '+(e.message||e.type)));
-  show('serving over http, canvas id="canvas" (SDL\'s default selector).');
+  const flat=x=>{try{return typeof x==='object'?JSON.stringify(x):String(x)}catch(e){return String(x)}};
+  const show=(level,s)=>{log.textContent+=(level==='log'?'':level.toUpperCase()+' ')+s+'\n';log.scrollTop=log.scrollHeight;};
+  for(const level of ['log','info','warn','error']){
+    const orig=console[level];
+    console[level]=function(...a){show(level,a.map(flat).join(' '));return orig.apply(console,a);};
+  }
+  window.addEventListener('error',e=>show('error',e.message||e.type));
+  // A wasm trap or an abort lands here as a rejected promise, and the message
+  // alone ("unreachable") says nothing. The stack is the useful half.
+  window.addEventListener('unhandledrejection',e=>{
+    const r=e.reason;
+    show('error','unhandled rejection: '+(r&&r.message||r));
+    if(r&&r.stack)show('error',r.stack);
+  });
+  show('log','serving over http, canvas id="canvas" (SDL\'s default selector).');
 })();
 </script>
 <script async src="dqiv_wasm_game.js"></script>

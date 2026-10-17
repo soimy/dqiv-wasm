@@ -104,9 +104,22 @@ NitroIdentity::~NitroIdentity() {currentIdentity=nullptr;}
 }
 
 // The overlay registry. On MSVC this function is generated from the section the
-// overlay objects land in; there is no such mechanism here, so the registry
-// starts empty and the game boots with no overlays. M3 is where this gets real.
-std::span<const pc::OverlayImage> gameOverlayImages() { return {}; }
+// overlay objects land in (#pragma data_seg/bss_seg plus __declspec(allocate),
+// via cmake/NativeOverlays.cmake). clang ignores all three, so there is no such
+// mechanism here.
+//
+// M3a: the registry has to contain overlay 38, because that is what main() loads
+// first, and GameBoot treats a missing one as fatal. The ranges are empty, so
+// snapshot() copies zero bytes and restore() copies nothing back - the module is
+// registered, but its writable image is not real yet. That is M3b, and the only
+// lever clang gives us for it is a two-pass link: read the addresses out of the
+// first link's map file, generate the table with them, link again.
+std::span<const pc::OverlayImage> gameOverlayImages() {
+    static const pc::OverlayImage images[] = {
+        {38, {nullptr, nullptr}, {nullptr, nullptr}, nullptr, nullptr},
+    };
+    return images;
+}
 
 extern "C" void func_02079e24(unsigned char* destination) {
     if(!pc::currentIdentity||!destination) throw std::runtime_error("Device identity requested without its native profile");

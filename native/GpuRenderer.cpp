@@ -21,7 +21,23 @@ void gpuCheckpoint(const char* stage) {
     static const bool enabled=[]{const char* v=std::getenv("DQIV_PROFILE");return v&&std::string(v)=="gpu";}();
     if(enabled) {ProfileScope timing(stage);gl::Finish();}
 }
+// Where a GL call goes wrong on WebGL2, reported at the call. Draining the error
+// queue at the end of a cycle - which is what the self-check does - tells you that
+// something failed but not which call raised it, and on WebGL2 that difference is
+// the whole answer. Costs nothing on the desktop path.
+#ifdef __EMSCRIPTEN__
+void gpuTraceAt(const char* where) {
+    if(!gpuTrace)return;
+    if(unsigned e=gl::GetError())std::printf("  trace %s: gl error 0x%x\n",where,e);
 }
+#define DQIV_TRACE(where) gpuTraceAt(where)
+#else
+#define DQIV_TRACE(where)
+#endif
+}
+#ifdef __EMSCRIPTEN__
+bool gpuTrace=false;   // defined here, declared in the header: the self-check turns it on
+#endif
 namespace {
 // The only divergence between the two backends. Everything these shaders use —
 // layout(location=), flat uvec4, textureLod, textureSize, texelFetch,
@@ -718,10 +734,12 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
     auto& fogged=fogged_[slot&1];lastSlot_=slot&1;++renders_;
     auto& scene=scene_[slot&1];
     resize(scene,width*ss,height*ss,true,true);resize(fogged,width*ss,height*ss,false,false);
+    DQIV_TRACE("after resize");
     if(!betweenFrame) {
         prepareTextures(batches,textures,options);
         upgradeTextures();
     }
+    DQIV_TRACE("after prepareTextures");
     std::vector<Prepared> polygons;
     std::optional<ProfileScope> stage(std::in_place,"r3d-prepare");
     std::uint32_t cachedViewport=0;const GpuMatrix* cachedTarget=nullptr;GpuMatrix cachedMatrix{};
@@ -929,6 +947,7 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
     const float clearAttributes[4]={(clear>>15)&1?1.f:0.f,float((clear>>24)&63)/63.f,0,1};
     gl::ClearBufferfv(GL_COLOR,0,clearColor);gl::ClearBufferfv(GL_COLOR,1,clearAttributes);
     gl::ClearBufferfi(GL_DEPTH_STENCIL,0,float((unsigned(state.clearDepth)<<9)|511)/16777215.f,0);
+    DQIV_TRACE("after clears");
     if(!vertices.empty()) {
         gl::UseProgram(program_);
         gl::Uniform1i(uniform(program_,"uTexture"),0);
@@ -941,6 +960,7 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
         const int passLocation=uniform(program_,"uPass");
         gl::BindVertexArray(vertexArray_);gl::BindBuffer(GL_ARRAY_BUFFER,vertexBuffer_);
         gl::BufferData(GL_ARRAY_BUFFER,vertices.size()*sizeof(GpuVertex),vertices.data(),GL_STREAM_DRAW);
+        DQIV_TRACE("after BufferData");
         gl::Enable(GL_DEPTH_TEST);gl::Enable(GL_STENCIL_TEST);gl::ActiveTexture(GL_TEXTURE0);
         const int clipLocation=uniform(program_,"uClipEnabled");gl::Uniform1i(clipLocation,1);
         const bool blending=(options.displayControl&8)!=0;
@@ -956,8 +976,12 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
                     (m==3?(i?2u:1u):0u)==kind&&((a^attributes)&((1u<<14)|(1u<<11)))==0&&(!first.translucent&&kind==0||i==id);
             };
             std::size_t end=start+1;while(end<order.size()&&same(polygons[order[end]]))++end;
+            // Bound every time, not only when there is a texture. An untextured
+            // batch used to leave whatever the last cycle put on unit 0 - and the
+            // last cycle's readNative leaves fogged_'s texture there, which is
+            // attached to a framebuffer, and that is what made the second draw fail.
+            gl::BindTexture(GL_TEXTURE_2D,first.texture);
             if(first.texture) {
-                gl::BindTexture(GL_TEXTURE_2D,first.texture);
                 const bool smooth=settings.smoothTextures&&!first.crisp;
                 // Sampling parameters are only sent when they change for this texture.
                 const unsigned sampling=first.wrap|(smooth?16u:0u)|(filter==GL_LINEAR?32u:0u);
@@ -993,6 +1017,7 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
                 gl::StencilFunc(GL_ALWAYS,0,0xff);gl::StencilMask(0x7f);gl::StencilOp(GL_KEEP,GL_KEEP,GL_REPLACE);
             }
             gl::DrawArrays(GL_TRIANGLES,int(start*3),int((end-start)*3));
+            DQIV_TRACE("after DrawArrays");
             start=end;
         }
         gl::Disable(GL_BLEND);gl::Disable(GL_DEPTH_TEST);gl::Disable(GL_STENCIL_TEST);
@@ -1035,9 +1060,18 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
     gpuCheckpoint("gpu-fog");
 }
 void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,const std::array<float,4>& source,unsigned key) {
+#ifdef __EMSCRIPTEN__
+    // WebGL2 gives no way to read a mapped buffer, so the async readback below has
+    // no read side here and every read is a direct one. That is a real cost - the
+    // pipelining between this frame's draw and the previous frame's readback is
+    // what the two-buffer scheme buys on desktop, and it is gone here - stated
+    // rather than hidden.
+    immediate=true;
+#endif
     ProfileScope timing(immediate?"readNative-sync":"readNative");
     resize(native_,256,192,false,false);
     gl::BindFramebuffer(GL_FRAMEBUFFER,native_.framebuffer);gl::Viewport(0,0,256,192);
+    DQIV_TRACE("readNative bind");
     gl::UseProgram(reduceProgram_);gl::BindVertexArray(emptyArray_);
     const auto& fogged=fogged_[lastSlot_];
     gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,threeColor(lastSlot_));
@@ -1046,10 +1080,12 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     gl::Uniform2f(uniform(reduceProgram_,"uOrigin"),source[0]*fogged.width,(1-source[1]-source[3])*fogged.height);
     gl::Uniform2f(uniform(reduceProgram_,"uScale"),source[2]*fogged.width/256.f,source[3]*fogged.height/192.f);
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
+    DQIV_TRACE("readNative draw");
     std::vector<std::uint32_t> raw(256*192);
     gl::PixelStorei(GL_PACK_ALIGNMENT,4);
     key&=1;
     if(immediate||!readPending_[key]) gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,raw.data());
+    DQIV_TRACE("readNative readpixels");
     if(immediate) readPending_[key]=false;
     else {
         if(!readBuffers_[0]) {
@@ -1062,9 +1098,11 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
         // Each key (screen) collects what its previous call queued, then queues this frame.
         gl::BindBuffer(GL_PIXEL_PACK_BUFFER,readBuffers_[key]);
         if(readPending_[key]) {
+#ifndef __EMSCRIPTEN__
             if(const auto* mapped=static_cast<const std::uint32_t*>(gl::MapBufferRange(GL_PIXEL_PACK_BUFFER,0,raw.size()*4,GL_MAP_READ_BIT))) {
                 std::copy_n(mapped,raw.size(),raw.data());gl::UnmapBuffer(GL_PIXEL_PACK_BUFFER);
             }
+#endif
         }
         gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,nullptr);
         gl::BindBuffer(GL_PIXEL_PACK_BUFFER,0);

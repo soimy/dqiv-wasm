@@ -125,6 +125,12 @@ std::filesystem::path executablePath() {
         if(path.size()>32768) throw std::runtime_error("Executable path too long");
         path.resize(path.size()*2);
     }
+#elif defined(__EMSCRIPTEN__)
+    // Measured, not assumed: read_symlink("/proc/self/exe") throws in node and in
+    // Chrome, so on wasm this function has to answer for itself. There is no
+    // executable in the browser's filesystem. The virtual filesystem root is where
+    // the extracted assets land, so that is what "beside the executable" means.
+    return std::filesystem::path("/");
 #else
     return std::filesystem::read_symlink("/proc/self/exe");
 #endif

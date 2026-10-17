@@ -59,6 +59,20 @@ static_assert(sizeof(void*) == 4, "The original game resources contain 32-bit po
 static_assert(sizeof(DataObject) == 0x10);
 static_assert(sizeof(UnkGameApplication) == 0xb4);
 std::span<const pc::OverlayImage> gameOverlayImages();
+#ifdef __EMSCRIPTEN__
+// Constructed first, in wasm/src/early-contexts.cpp, which is listed first so
+// clang's static-init order puts them before the game's own constructors. clang
+// ignores #pragma init_seg, so on wasm those constructors run at startup and the
+// contexts cannot be late the way they are on MSVC. See the note in that file.
+namespace pc {
+extern const std::filesystem::path earlySavePath;
+extern const std::filesystem::path earlyIdentityPath;
+extern NitroIdentity earlyIdentity;
+extern NitroVideo earlyVideo;
+extern NitroPower earlyPower;
+extern NitroOverlays earlyOverlays;
+}   // namespace pc
+#endif
 
 namespace {
 // The game has no console: its output goes to a journal beside the save.
@@ -96,7 +110,16 @@ pc::Assets openResources() {
             if(std::filesystem::is_directory(directory/name)) {assets.add(directory/name);break;}
             const auto parent=directory.parent_path();if(parent==directory)break;directory=parent;
         }
+#ifdef __EMSCRIPTEN__
+    // There is no asset pack on wasm yet - that is M5, which runs the extraction
+    // in the browser on the user's own ROM. So the pack is allowed to be empty:
+    // the run gets through setup() and the self-check, and stops at the first
+    // thing that genuinely needs an asset. On Windows this stays a hard error,
+    // and it should - a Windows build without its data is a broken build.
+    if(!assets.contains("data/SOUND/sound_data.sdat"))std::cout<<"No asset pack: running with an empty one\n";
+#else
     if(!assets.contains("data/SOUND/sound_data.sdat"))throw std::runtime_error("Game data not found: build the game with build.ps1");
+#endif
     return assets;
 }
 // Everything the frame needs, in one place. On Windows this lived on main's
@@ -111,13 +134,25 @@ struct GameRun {
     pc::GameWindow window{false,false};
     pc::GameServices services{assets};
     pc::NitroFilesystem filesystem{assets};
+#ifdef __EMSCRIPTEN__
+    // Bound, not owned. These three are constructed early, see above.
+    const std::filesystem::path& savePath{pc::earlySavePath};
+    const std::filesystem::path& identityPath{pc::earlyIdentityPath};
+    pc::NitroIdentity& identity{pc::earlyIdentity};
+#else
     const std::filesystem::path savePath{pc::defaultSavePath()};
-    pc::SaveStore save{savePath};
     std::filesystem::path identityPath{savePath.string()+".identity"};
     pc::NitroIdentity identity{identityPath};
+#endif
+    pc::SaveStore save{savePath};
     pc::NitroBackup backup{save};
+#ifdef __EMSCRIPTEN__
+    pc::NitroVideo& video{pc::earlyVideo};
+    pc::NitroPower& power{pc::earlyPower};
+#else
     pc::NitroVideo video;
     pc::NitroPower power;
+#endif
     pc::GxGeometry geometry;
     pc::NitroGeometry geometryContext{geometry};
     pc::GxTextures textures;
@@ -125,7 +160,11 @@ struct GameRun {
     pc::NitroSound sound;
     pc::MobileSound mobileSound{assets,48000};
     pc::NitroThreads threads;
+#ifdef __EMSCRIPTEN__
+    pc::NitroOverlays& overlays{pc::earlyOverlays};
+#else
     pc::NitroOverlays overlays{gameOverlayImages()};
+#endif
     pc::FramePresenter presenter{window,display,textures};
     OSThreadQueue frameQueue{};
     std::array<std::int16_t,1600> samples{};
