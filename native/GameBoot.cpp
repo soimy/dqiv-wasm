@@ -111,11 +111,23 @@ pc::Assets openResources() {
             const auto parent=directory.parent_path();if(parent==directory)break;directory=parent;
         }
 #ifdef __EMSCRIPTEN__
-    // There is no asset pack on wasm yet - that is M5, which runs the extraction
-    // in the browser on the user's own ROM. So the pack is allowed to be empty:
-    // the run gets through setup() and the self-check, and stops at the first
-    // thing that genuinely needs an asset. On Windows this stays a hard error,
-    // and it should - a Windows build without its data is a broken build.
+    // The browser build runs on data the player supplied: the pack their machine built
+    // (the route this repo already has - build.ps1, dqiv_pack), or their own ROM. The
+    // page writes whichever it gets to /pack, once, before main(). When it has not,
+    // the pack is allowed to be empty so the run gets through setup() and the
+    // self-check and stops at the first thing that genuinely needs an asset. On
+    // Windows this stays a hard error, and it should - a Windows build without its
+    // data is a broken build.
+    //
+    // Read in place, not extracted, measured both ways: extracting blocks the page's
+    // own main thread on a 128 MB ROM. What makes reading in place affordable is that
+    // Assets keeps the source in memory, so a file inside it is a slice - MEMFS copies
+    // the whole file on every open, and doing that per file is what blocked.
+    if(std::filesystem::is_regular_file("/pack")) {
+        pc::Assets supplied("/pack");
+        std::cout<<"Using what the page put at /pack: "<<supplied.count()<<" files\n";
+        return supplied;
+    }
     if(!assets.contains("data/SOUND/sound_data.sdat"))std::cout<<"No asset pack: running with an empty one\n";
 #else
     if(!assets.contains("data/SOUND/sound_data.sdat"))throw std::runtime_error("Game data not found: build the game with build.ps1");
@@ -229,6 +241,16 @@ struct GameRun {
         pc::profileFrame();
         geometry.clearTriangles();
         ++frame;
+#ifdef __EMSCRIPTEN__
+        // The journal only prints on a scene change, so "the journal stopped growing"
+        // does not mean the game stopped - and a WebGL canvas gives the same image
+        // back while it is showing the same scene. So the frame counter is the thing
+        // that answers whether the loop is running, and this is the cheapest place to
+        // read it from the browser. Printing the first few frames as well, because a
+        // counter that only speaks every 60 frames cannot tell "stopped at 1" from
+        // "never started".
+        if(frame<3||frame%60==0)std::cout<<"frame "<<frame<<"\n";
+#endif
     }
 };
 GameRun* gameRun=nullptr;   // the wasm loop callback needs a handle to it

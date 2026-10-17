@@ -1,5 +1,6 @@
 #include "GameInstall.hpp"
 #include "Binary.hpp"
+#include "AssetPack.hpp"
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -117,6 +118,18 @@ std::string romGameCode(const std::filesystem::path& path) {
         if(crc!=Binary(header).u16(0x15e))return {};
         return std::string(header.begin()+12,header.begin()+16);
     } catch(const std::exception&) {return {};}
+}
+std::map<std::string,RomRange> romRanges(const std::filesystem::path& path) {
+    Source rom(path);
+    std::map<std::string,RomRange> out;
+    // No checksum, and that is a measured decision, not an oversight: hashing every
+    // ROM file up front blocks the page's own main thread on a 128 MB ROM (a 1 MB
+    // file keeps it answering 1+1 every poll; the ROM does not, from the moment the
+    // file is handed over), and raising the heap to 320 MB did not change that. So a
+    // ROM read in place is trusted, where a pack file is verified - Assets::read
+    // skips the check when the stored hash is zero, which is what this gives it.
+    for(const auto& [name,r]:romFiles(rom))out.emplace(name,RomRange{r.offset,r.size,0});
+    return out;
 }
 void extractRom(const std::filesystem::path& path,const std::filesystem::path& folder) {
     const auto code=romGameCode(path);

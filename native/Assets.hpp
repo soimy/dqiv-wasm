@@ -26,5 +26,11 @@ public:
 private:
     struct Entry { std::filesystem::path path; std::uint64_t offset=0,size=0,hash=0; bool packed=false; };
     std::unordered_map<std::string, Entry> files_;
+    // A packed source is read once and kept, so a file inside it is a slice. On the
+    // browser's virtual filesystem every open-then-read copies the whole file, so
+    // reading a pack per file would copy it about 2000 times - measured as the page
+    // blocking its own main thread. Windows pays nothing for this: the pack is small
+    // and one read is the same cost as many.
+    std::unordered_map<std::string, std::vector<std::uint8_t>> sources_;
 };
 }

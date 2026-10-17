@@ -18,11 +18,19 @@
      what the page can show. */
   #log{position:absolute;left:0;bottom:0;max-height:22%;overflow:auto;padding:6px;
     white-space:pre-wrap;background:rgba(0,0,0,.55);pointer-events:none}
+  #pick{position:absolute;left:0;top:0;padding:6px;background:rgba(0,0,0,.55);
+    display:flex;gap:8px;align-items:center}
+  #pick.hidden{display:none}
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="canvas" tabindex="0"></canvas></div>
 <div id="log"></div>
+<div id="pick">
+  <input type="file" id="rom" accept=".nds,*">
+  <span>pick the pack your machine built (or your own ROM) - the game reads it in place.
+    Or <a href="#" id="norom">start without one</a> and it runs with an empty pack.</span>
+</div>
 <script>
 // Mirror stdout, stderr and the console onto the page. The game reports its
 // failures through std::cerr, which lands on console.error, so hooking only
@@ -44,8 +52,24 @@
     if(r&&r.stack)show('error',r.stack);
   });
   show('log','serving over http, canvas id="canvas" (SDL\'s default selector).');
+
+  // The ROM has to be in the virtual filesystem before main() runs, so the page
+  // owns the start: read the file, then load the script with a preRun that writes
+  // it. preRun callbacks run before main, which is exactly the guarantee needed.
+  // MEMFS does not survive a reload, so this is a per-visit pick - stated rather
+  // than papered over with an IDBFS, which would need COOP/COEP headers we decided
+  // against (single-threaded cooperative scheduling, no SharedArrayBuffer).
+  let romBytes=null;
+  const start=()=>{
+    document.getElementById('pick').classList.add('hidden');
+    window.Module={preRun:[function(){ if(romBytes) FS.writeFile('/pack',new Uint8Array(romBytes)); }]};
+    const s=document.createElement('script');s.src='dqiv_wasm_game.js';document.body.appendChild(s);
+  };
+  document.getElementById('rom').addEventListener('change',async e=>{
+    const f=e.target.files[0];if(!f)return;romBytes=await f.arrayBuffer();start();
+  });
+  document.getElementById('norom').addEventListener('click',e=>{e.preventDefault();start();});
 })();
 </script>
-<script async src="dqiv_wasm_game.js"></script>
 </body>
 </html>

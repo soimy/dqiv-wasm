@@ -142,5 +142,21 @@ target_link_libraries(dqiv_wasm_game PRIVATE
 # for a game that allocates as it goes. The cost is stated: growing copies the whole
 # heap, so it is a pause, and the starting figure is raised so there are fewer of
 # them rather than one big one at the worst moment.
+#
+# Measured, both directions, and the result is the opposite of what I first assumed:
+# 64 MB is the figure that keeps the browser responsive on a 128 MB ROM (every poll
+# answered, 1-4 ms), and raising it to 320 MB is what made the page stop answering
+# 1+1 from the moment the file was handed over. So the starting figure stays at the
+# measured working value and growth stays on, pause and all.
+#
+# Asyncify, and the reason is measured: five shapes of the same job all blocked the
+# page's own main thread on a 128 MB ROM (extract, ROM as source, source cached so a
+# file is a slice, 64 MB heap, 320 MB heap), while a 1 MB file kept it answering every
+# poll. So the blocker is putting a source this size through the virtual filesystem,
+# and the only lever that lets the main thread yield during it is this. It is
+# compatible with the single-threaded cooperative scheduling we chose - no
+# SharedArrayBuffer, no COOP/COEP headers. The cost is stated, not hidden: Asyncify
+# instruments every function that can pause, so the whole game gets slower, not just
+# this part.
 target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2
-    -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1)
+    -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1)
