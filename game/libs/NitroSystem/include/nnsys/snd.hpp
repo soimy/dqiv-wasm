@@ -17,11 +17,11 @@ extern "C" {
     int func_02074e24(int seqNo, void* heap);                       // NNS_SndArcLoadSeq
     int func_02074e50(int no, void* heap);
     int func_02074e7c(int no, void* heap);
-    void func_02075780(void* heap);
+    int func_02075780(void* heap);                                  // snd_arcplayer.c returns BOOL
     int func_0207581c(void* handle, int seqNo);
     int func_02075864(void* handle, int no, int index);
-    int func_02075aa4(int groupNo, void* heap);
-    void func_02075cec(void* handle, int no, int flag);
+    void func_02075aa4(int groupNo, void* heap);                    // snd_arcstrm.c returns nothing
+    int func_02075cec(void* handle, int no, int flag);              // snd_arcstrm.c returns BOOL
     void func_02075d14(void* handle, int value);
     void func_02075d30(void* handle, int volume);
     void func_02075d44(void* handle);

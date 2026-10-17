@@ -40,7 +40,7 @@ BOOL func_02060fec(FS_FileIdentifier* id, const char* path);
 void func_02060e04(FS_File* file);
 BOOL func_02061074(FS_File* file, FS_FileIdentifier id);
 BOOL func_0206112c(FS_File* file);
-BOOL func_02061228(FS_File* file);
+void func_02061228(FS_File* file);   // fs_internal.h agrees; this is the async cancel, not a close
 s32  func_02061270(FS_File* file, void* dst, s32 len);
 BOOL func_02061280(FS_File* file, s32 offset, int origin);
 
@@ -77,7 +77,7 @@ void func_0207a5f0(const void* start, const void* end);
 void func_0207a610(const void* start, const void* end);
 void func_0207a630(const void* start, const void* end);
 void func_0207a650(int a, int b, int c, int d);
-void func_0207a9e8(int flag);
+BOOL func_0207a9e8(int flag);   // defined in snd_command.c
 void func_0207aba4(u32 tag);
 u32  func_0207ac10(void);
 s32  func_0207b024(int volume);
@@ -90,7 +90,7 @@ u32  func_0207b410(void* waveArc);
 void* func_0207b44c(void* waveArc, u32 index);
 void func_0207b418(void* waveArc, u32 index, void* wave);
 void func_020732d0(u32 capBitMask);
-BOOL func_020732a0(u32 chBitMask);
+void func_020732a0(u32 chBitMask);   // defined in snd_resource.c, returns nothing
 BOOL func_02073258(u32 chBitMask);
 int  func_020732ec(void);
 void func_02073334(int alarm);

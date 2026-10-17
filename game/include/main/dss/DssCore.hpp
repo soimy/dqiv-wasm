@@ -34,13 +34,13 @@ extern "C" {
     unsigned long long func_02079bf0(void);     // OS_GetTick
     void func_0207b708(void);
     void func_0206366c(void);
-    void func_02063920(int);
+    unsigned func_02063920(unsigned dmaNo);     // GX_InitDMA - returns the previous channel
     void func_02079b10(void);
     void func_02077480(int type, void (*function)());   // OS_SetIrqFunction
     void func_02077650(int mask);               // OS_EnableIrqMask
     void func_02060ddc(int dma);                // FS_Init
     void func_0207315c(void);
-    void func_02064abc(void);                   // GX_DisableBankForLcdc
+    int func_02064abc(void);                    // GX_DisableBankForLcdc - returns the previous mask
     void func_02065088(void);
     void func_02065228(void);
     void func_0206dfa4(void);

@@ -58,7 +58,7 @@ extern void func_02061b88(UnkMtx33* m);
 extern void func_02061f58(UnkMtx43* m);
 extern void func_02061f80(const UnkMtx43* src, UnkMtx44* dst);
 extern void func_02061fb4(const UnkMtx43* src, UnkMtx43* dst, s32 x, s32 y, s32 z);
-extern void func_02062040(const UnkMtx43* src, UnkMtx43* dst);
+extern s32 func_02062040(const UnkMtx43* src, UnkMtx43* dst);   // Mtx43Add, in fx_mtx43.c
 extern void func_020623cc(const UnkMtx33* a, const UnkMtx43* b, UnkMtx43* ab);
 extern void func_02062740(UnkMtx44* m);
 extern void func_020627a0(const UnkMtx44* a, const UnkMtx44* b, UnkMtx44* ab);

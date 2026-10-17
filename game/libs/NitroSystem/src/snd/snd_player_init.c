@@ -78,7 +78,7 @@ void* func_02067f98(UnkFndList* list, void* object);
 void* func_02074d1c(void* heap, u32 size, void (*callback)(void*, u32, u32, u32), u32 data1, u32 data2);
 void* func_02074bd8(void* buffer, u32 size);
 void func_02073b54(void* mem, u32 size, u32 data1, u32 data2);
-void func_020738a4(UnkSndSeqPlayer* player);
+void func_020738a4(UnkSndSeqPlayer* player, int fadeFrame);   // defined in snd_player.c, which uses fadeFrame
 void func_0207a410(u32 playerNo, int fadeFrame);
 BOOL func_0207af44(u32 playerNo);
 u32 func_0207af18(void);
@@ -123,9 +123,9 @@ BOOL func_020733a8(int playerNo, void* heap, u32 size)
     return TRUE;
 }
 
-void func_0207343c(UnkSndHandle* handle)
+void func_0207343c(UnkSndHandle* handle, int fadeFrame)
 {
-    func_020738a4(handle->player);
+    func_020738a4(handle->player, fadeFrame);
 }
 
 void func_0207344c(UnkSndHandle* handle)

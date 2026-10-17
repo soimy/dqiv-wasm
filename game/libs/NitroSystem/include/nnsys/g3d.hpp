@@ -232,7 +232,7 @@ extern "C" {
     NNSG3dGeBuffer* func_0206dcd0(void);                                       // NNS_G3dGeReleaseBuffer
     void func_0206de34(unsigned int op, const void* args, unsigned int num);   // NNS_G3dGeBufferOP_N
     void func_0206b294(int* x1, int* y1, int* x2, int* y2);                    // NNS_G3dGlbGetViewPort
-    void func_0206e154(int x, int y, VecFx32* near, VecFx32* far);             // NNS_G3dScrPosToWorldLine
+    int  func_0206e154(int x, int y, VecFx32* near, VecFx32* far);              // NNS_G3dScrPosToWorldLine, returns a hit flag
     void func_0206dd70(int flag);
     void func_02067940(const void* src, void* dst);                             // MI_Copy36B
     void G3d_SBCRender_007(NNSG3dRS* rs, unsigned int opt);

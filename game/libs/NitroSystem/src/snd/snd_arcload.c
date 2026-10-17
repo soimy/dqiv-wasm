@@ -48,7 +48,7 @@ s32   func_02074ad8(u32 fileId, void* dst, u32 size, u32 offset);
 void* func_02074b70(u32 fileId);
 void  func_02074b98(u32 fileId, void* mem);
 void* func_02074d1c(void* heap, u32 size, UnkSndHeapCallback callback, void* data1, u32 data2);
-UnkSndInstPos func_0207b240(void);
+UnkSndInstPos func_0207b240(void* bank);   // defined in snd_bank.c; the parameter is unused there
 BOOL  func_0207b260(void* bank, UnkSndInstData* inst, UnkSndInstPos* pos);
 
 int   func_02074ea8(int seqNo, u32 flags, void* heap, BOOL addToArc, void** pData);
@@ -410,7 +410,7 @@ BOOL func_020755f8(UnkSndWaveArc* waveArc, u32 index, u32 fileId, void* heap) {
 }
 
 BOOL func_020756c0(UnkSndWaveArc* waveArc, void* bank, int index, u32 fileId, void* heap) {
-    UnkSndInstPos pos = func_0207b240();
+    UnkSndInstPos pos = func_0207b240(bank);
     UnkSndInstData inst;
 
     if (bank == NULL) {
