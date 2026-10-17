@@ -11,12 +11,26 @@ source /path/to/emsdk/emsdk_env.sh     # once per shell
 ./wasm/build.sh                        # or: BUILD_TYPE=Release ./wasm/build.sh
 node wasm/build/dqiv_wasm_spike.js
 node wasm/build/dqiv_layout_probe.js
+node wasm/build/dqiv_wasm_game.js      # stops at the GL context: node has no WebGL
 ```
 
-Verified with Emscripten 4.0.13 on macOS (Apple Silicon): 677 translation units,
-0 errors, 8.5 MB `.wasm` (Debug). Rebuilt from scratch on 2026-10-16 with the same
-result; `.github/workflows/ci.yml` runs this build on `ubuntu-latest` and asserts the
-spike prints `= 3` plus the four layout assertions below.
+To see a picture, serve the build directory over http — the `.wasm` is fetched, not
+embedded, so `file://` will not work:
+
+```bash
+cp wasm/index.html wasm/build/ && cd wasm/build && python3 -m http.server
+```
+
+Then open `http://localhost:8000/index.html`. This is the step that needs a person:
+there is no browser automation in this project. The self-check prints two lines
+(byte order, clip) to the console and mirrors them onto the bottom of the page.
+
+Verified with Emscripten 4.0.13 on macOS (Apple Silicon): 0 errors. Debug `.wasm`:
+spike 8.6 MB, game 23.4 MB, probe 0.4 MB. `.github/workflows/ci.yml` runs this build
+on `ubuntu-latest` and asserts the spike prints `= 3`, the four layout assertions, the
+byte-order round trip, all 8 shaders against both GLSL profiles (`check-shaders.py`),
+and that the game gets through the whole decompiled startup and stops at the GL
+boundary.
 
 ## What this builds
 
@@ -30,6 +44,7 @@ spike prints `= 3` plus the four layout assertions below.
 | `dqiv_portable` | portable stand-ins for the three Windows-only platform files |
 | `dqiv_wasm_spike` | links everything into one module and runs a real decompiled function |
 | `dqiv_layout_probe` | compile-time guard for the 32-bit layout assumptions |
+| `dqiv_wasm_game` | the real game: the platform layer compiled for wasm32 for the first time, plus `src/gpu-selfcheck.cpp` |
 
 ## Why wasm32 works without touching the game
 
@@ -45,11 +60,21 @@ That is why `sizeof(void*) == 4`, `sizeof(DataObject) == 0x10` and
 
 ## What is deliberately missing
 
-* **No renderer.** `GameWindow.cpp`, `GpuRenderer.cpp`, `GlLoader.cpp`,
-  `TextCanvas.cpp`, `FramePresenter.cpp`, `NitroSymbols.cpp`, `DssRuntime.cpp`
-  and `GameBoot.cpp` still assume a desktop OpenGL 3.3 window. Replacing them with
-  a WebGL2/GLES3 backend is the next milestone; the gap list is in
-  [`docs/porting/02-FINDINGS.md`](../docs/porting/02-FINDINGS.md).
+* **No title screen.** The renderer is compiled, linked and running on a real GLES
+  3.0 context, and `src/gpu-selfcheck.cpp` puts known answers through the real
+  shaders. What is missing is the thing the game needs first:
+  `GameBoot::openResources()` throws without `data/SOUND/sound_data.sdat`, so it
+  stops before it can draw a picture. That is M5.
+* **Three honest minimum implementations, not implementations.** `TextCanvas` has no
+  rasterizer on wasm, so the FPS overlay keeps its rectangle and loses its text;
+  `settings.autoQuality` is a no-op because the GPU-timing path that drives it is
+  compiled out; `divideLikeTheDs` (DS software-division semantics — `x/0` gives `x`,
+  `x%0` gives `0`) is desktop-only, because wasm traps on integer division by zero
+  and the instance is already gone by the time it could be handled.
+* **13 linker signature mismatches, 7 of them already in the spike.** All decompiler
+  signature guesses in the decompiled C sources — MSVC has the same ones silently,
+  wasm only says so out loud. wasm-ld inserts thunks so it links, but a mismatched
+  return type or arity is a real correctness risk and needs looking at one by one.
 * **No overlay section bracketing.** Upstream generates it with MSVC-only
   `#pragma init_seg/data_seg/bss_seg` (see `cmake/NativeOverlays.cmake`). The game
   compiles and links without it, but per-overlay state snapshot/restore is not
