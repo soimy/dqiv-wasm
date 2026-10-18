@@ -1,8 +1,6 @@
 #include "main/menu/MenuManager.hpp"
-#ifdef __EMSCRIPTEN__
 #include <iostream>
 static int menuManagerCalls;   // how many times execute() has been measured
-#endif
 #include "main/dss/UnkDisplay.hpp"
 #include "main/menu/UnkMenuBg.hpp"
 #include "main/menu/UnkMenuPartsDraw.hpp"

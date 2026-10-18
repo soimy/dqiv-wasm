@@ -1,7 +1,5 @@
 #include <nitro/native_g3.h>
-#ifdef __EMSCRIPTEN__
 #include <iostream>
-#endif
 #include "GameInfo.hpp"
 #include "main/global/GlobalGamePart.hpp"
 #include "main/global/Global.hpp"
@@ -47,9 +45,7 @@ static unsigned int s_frameEndLine;
 static int s_unk28;
 static void (*s_callback)();
 static unsigned int s_drawLine;
-#ifdef __EMSCRIPTEN__
 static int nativeCalls;   // how many execute steps we have measured, for the trace above
-#endif
 static unsigned int s_endLine;
 static unsigned int s_renderedLines;
 static int s_unk14;
@@ -147,27 +143,19 @@ ARM void GlobalGamePart::vf0c()
     // does not depend on any other link in the chain.
     std::cout<<"  vf0c: ENTERED\n";
     int index = (unkfunc_02081254() & 1) ? 0 : 1;
-#ifdef __EMSCRIPTEN__
     ++nativeCalls;
     stage("tick");
-#endif
     s_tickLog[index][0] = unkfunc_0207e7e8();
     s_lineLog[index][0] = GX_GetVCount();
     unkfunc_02052464();
-#ifdef __EMSCRIPTEN__
     stage("gx fifo");
-#endif
     TextAPI::unkfunc_02054884();
-#ifdef __EMSCRIPTEN__
     stage("text api");
-#endif
     if (unkfunc_0203f210()) {
         onExecutePart();
         unkfunc_0203f1a8();
     }
-#ifdef __EMSCRIPTEN__
     stage("parts executed");
-#endif
     s_tickLog[index][1] = unkfunc_0207e7e8();
     s_lineLog[index][1] = GX_GetVCount();
 #ifdef DQIV_NATIVE

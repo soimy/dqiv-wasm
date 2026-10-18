@@ -1,7 +1,5 @@
 #include "main/menu/UnkMenuSystem.hpp"
-#ifdef __EMSCRIPTEN__
 #include <iostream>
-#endif
 #include "main/menu/UnkMenuIconData.hpp"
 #include "main/menu/MenuManager.hpp"
 
