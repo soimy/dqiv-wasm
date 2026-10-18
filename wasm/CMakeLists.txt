@@ -159,4 +159,5 @@ target_link_libraries(dqiv_wasm_game PRIVATE
 # instruments every function that can pause, so the whole game gets slower, not just
 # this part.
 target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2
-    -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1)
+    -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1
+    -Wl,--Map=/tmp/dqivmap.txt)

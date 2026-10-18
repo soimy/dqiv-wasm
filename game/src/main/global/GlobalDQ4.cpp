@@ -2,6 +2,7 @@
 #include "main/data/DataObject.hpp"
 #include "main/dss/UnkArrayWarning.hpp"
 #ifdef DQIV_NATIVE
+#include <iostream>
 #include <stdexcept>
 #include "nitro/os.hpp"
 #include "Input.hpp"
@@ -123,8 +124,21 @@ ARM void GlobalDQ4::unkfunc_0205815c(UnkGameTask* task)
 ARM void GlobalDQ4::unkfunc_02058188(UnkGameTask* task)
 {
     task->vf08();
+#ifdef __EMSCRIPTEN__
+    // Measured, because the stage print after this function never appears: the three
+    // virtuals on the current task are all empty in the decompiled source, so an empty
+    // function not returning means my vtable mapping is wrong, and I would rather find
+    // that out than assume it.
+    std::cout<<"  unkfunc_02058188: vf08 returned\n";
+#endif
     task->vf0c();
+#ifdef __EMSCRIPTEN__
+    std::cout<<"  unkfunc_02058188: vf0c returned\n";
+#endif
     task->vf10();
+#ifdef __EMSCRIPTEN__
+    std::cout<<"  unkfunc_02058188: vf10 returned\n";
+#endif
 }
 
 ARM void UnkGameTaskHook::vf00()
@@ -158,19 +172,44 @@ void GlobalDQ4::nativeStart(int partId) {
     unkfunc_02058148(currentTask_);
 }
 bool GlobalDQ4::nativeStep() {
+#ifdef __EMSCRIPTEN__
+    // Measured, because the browser stops here and I would rather not guess: the game
+    // reaches its own initialisation, prints Scene 11 frame 0, and step() is then
+    // called exactly once. So this line is where it decides to stop. Printing the
+    // state it is deciding on, for the first few calls.
+    static int calls=0;
+    if(calls<3) {std::cout<<"nativeStep call "<<calls<<" currentTask_ "<<(currentTask_?"set":"NULL")
+              <<" part_id_ "<<part_id_<<" nextPartId_ "<<nextPartId_<<"\n";++calls;}
+    auto stage=[&](const char* what){if(calls<=3)std::cout<<"  nativeStep stage: "<<what<<"\n";};
+#endif
     if (!currentTask_) return false;
     unkfunc_02058188(currentTask_);
+#ifdef __EMSCRIPTEN__
+    stage("task vf08/vf0c/vf10 done");
+#endif
     // Display registers, OAM and VRAM uploads are finalized by vf10 after its
     // VBlank wait. Present here, before a scene transition frees its resources.
     pc::completeNativeFrame();
+#ifdef __EMSCRIPTEN__
+    stage("frame callback done");
+#endif
     if (s_hook.unk_08) s_hook.unk_08();
+#ifdef __EMSCRIPTEN__
+    stage("play time hook done");
+#endif
     if (nextPartId_ != -1) {
         const auto next = nextPartId_;
         if (next < 0 || next >= 24 || !task_[next]) throw std::runtime_error("Game scene not ported or registered");
         unkfunc_0205815c(currentTask_);
+#ifdef __EMSCRIPTEN__
+        stage("old task terminate done");
+#endif
         prevPartId_ = part_id_; part_id_ = next; nextPartId_ = -1;
         currentTask_ = task_[part_id_];
         unkfunc_02058148(currentTask_);
+#ifdef __EMSCRIPTEN__
+        stage("new task initialize done");
+#endif
     }
     return true;
 }

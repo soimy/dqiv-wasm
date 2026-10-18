@@ -4,6 +4,7 @@
 #include <nitro/native_video.h>
 #include <array>
 #include <vector>
+#include <iostream>
 extern "C" {
 void GX_Init();
 void GX_DispOff();
@@ -15,7 +16,19 @@ int data_02116ce4=0;
 void unkfunc_0207e7e0() {}
 void unkfunc_0207e7e4() {}
 void unkfunc_0207e7f4(const char*,...) {}
-int unkfunc_0207e7e8() {return static_cast<int>(func_02079bf0());}
+int unkfunc_0207e7e8() {
+    // Measured, because the browser stops here and the two calls before it in
+    // GlobalGamePart::vf0c() are both confirmed to return: unkfunc_02081254() is a
+    // one-line return of the frame counter, and GX_GetVCount() reaches the frame
+    // boundary and comes back with the threads having had their turns. So this is the
+    // one that does not come back, and it should - it is a real clock. Printing around
+    // it so "did we get here" and "did the clock answer" have separate answers.
+    static int calls;
+    if(calls<3) {std::cout<<"  unkfunc_0207e7e8: entered\n"; ++calls;}
+    int tick = static_cast<int>(func_02079bf0());
+    if(calls<=3) std::cout<<"  unkfunc_0207e7e8: clock answered, tick "<<tick<<"\n";
+    return tick;
+}
 
 void unkfunc_0207e934(int extendedArena) {
     // Host heaps, files, clock and graphics contexts are established by main.

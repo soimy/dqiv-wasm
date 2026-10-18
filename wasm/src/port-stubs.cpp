@@ -10,6 +10,11 @@
 #include "NitroThreads.hpp"
 #include "NitroIdentity.hpp"
 #include "NitroOverlays.hpp"
+#include "NitroVideo.hpp"
+#ifdef __EMSCRIPTEN__
+#include <iostream>
+#include <string>
+#endif
 extern "C" {
 #include <nitro/os/thread.h>
 #include <nitro/os/mutex.h>
@@ -66,8 +71,28 @@ void OS_PauseThread(OSThreadQueue*) {
     // calls it when it wants to wait for the next frame, so what the Windows build
     // does on an idle thread happens here instead, and the threads the SDK creates
     // get their turn at the same point. Nothing else needs to drive the loop.
-    if(pc::idleHandler) pc::idleHandler();
+    //
+    // It runs once per frame, not once per call, and that is a measured decision:
+    // GX_GetVCount() on wasm now reaches the boundary through this function, and
+    // GlobalGamePart::vf10() reads VCount five times, so without the guard the
+    // boundary would run five times a frame.
+    static unsigned frameId = 0;
+    static unsigned lastRun = ~0u;
+    if (lastRun == frameId) return;
+    lastRun = frameId;
+    ++frameId;
+    if(pc::idleHandler) { std::cout<<"  boundary: idle handler\n"; pc::idleHandler(); std::cout<<"  boundary: idle handler returned\n"; }
     pc::runPortableThreads();
+}
+int pcWasmVCount(void) {
+    // What GX_GetVCount() asks the emulated hardware for on a wasm host. Reaching the
+    // boundary is the whole job: on the real DS the game's `while (GX_GetVCount() >
+    // 180)` means "wait for the scanline counter to pass 180 next frame", and here the
+    // boundary IS that next frame, so the read resolves at the same moment the real
+    // one would. The value is 0 so the guard fails, which is what the hardware gives
+    // at the start of a frame.
+    OS_PauseThread(0);
+    return 0;
 }
 void OS_UnpauseThread(OSThreadQueue*) {}
 }
@@ -143,9 +168,18 @@ PortableThread* find(OSThread* sdk) {
 }
 }
 void runPortableThreads() {
+    // Measured, because the browser stops inside the frame boundary now: GX_GetVCount()
+    // on wasm reaches this, and the print before it in GlobalGamePart::vf0c() is the
+    // last one that speaks. So the boundary runs and does not come back. Naming which
+    // part of it blocks.
+    std::cout<<"  runPortableThreads: "+std::to_string(portableCount)+" threads\n";
     for(unsigned i=0;i<portableCount;++i) {
         auto& thread=portableThreads[i];
-        if(thread.runnable&&thread.function) {thread.runnable=false;thread.function(thread.argument);}
+        if(thread.runnable&&thread.function) {
+            std::cout<<"    thread "+std::to_string(i)+" running\n";
+            thread.runnable=false;thread.function(thread.argument);
+            std::cout<<"    thread "+std::to_string(i)+" returned\n";
+        }
     }
 }
 }

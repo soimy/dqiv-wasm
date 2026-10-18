@@ -1,4 +1,8 @@
 #include "main/menu/MenuManager.hpp"
+#ifdef __EMSCRIPTEN__
+#include <iostream>
+static int menuManagerCalls;   // how many times execute() has been measured
+#endif
 #include "main/dss/UnkDisplay.hpp"
 #include "main/menu/UnkMenuBg.hpp"
 #include "main/menu/UnkMenuPartsDraw.hpp"
@@ -74,8 +78,15 @@ THUMB int MenuManager::isRequesting()
 
 THUMB void MenuManager::execute()
 {
+    // Measured, because the browser stops inside this function: the stage before it in
+    // UnkMenuSystem prints nothing at all, so this call never returns. Naming each
+    // decision so the last one that speaks is the one before the block.
+    auto stage=[&](const char* what){if(menuManagerCalls<4)std::cout<<"  MenuManager::execute stage: "<<what<<"\n";};
+    stage("entered");
     if (data_0210bc40.unkfunc_02058380() == 1) {
+        stage("check 02058380 returned 1");
         s_redraw = 1;
+        ++menuManagerCalls;
         return;
     }
     int request = s_requestEnable;
@@ -85,14 +96,20 @@ THUMB void MenuManager::execute()
         enable = request;
         s_redraw = 1;
         if (request == 0) {
+            stage("menu disabled, running the two cleanups");
+            ++menuManagerCalls;
             unkfunc_02050614(1);
             unkfunc_02050494();
             return;
         }
     }
     if (enable == 0) {
+        stage("enable is 0, returning early");
+        ++menuManagerCalls;
         return;
     }
+    stage("past the early returns");
+    ++menuManagerCalls;
     MENUDISPLAY_MODE mode = s_mode;
     MENUDISPLAY_MODE next = s_next;
     if (mode != next) {

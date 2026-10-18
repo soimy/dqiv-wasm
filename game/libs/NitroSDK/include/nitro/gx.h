@@ -428,7 +428,36 @@ inline void GXS_SetOBJVRamModeChar(u32 value) {
 }
 
 inline s32 GX_GetVCount(void) {
+#ifdef __EMSCRIPTEN__
+    // Measured, and this is why the simple version fails: the game's frame
+    // finalisation contains `if (GX_GetVCount() > 180) { while (GX_GetVCount() > 180)
+    // {} }`, and the frame boundary on a wasm host is reached only through OS_Wait(),
+    // which comes AFTER this spin. So nothing can advance the counter from the
+    // boundary - the boundary never gets there. So on a single-threaded cooperative
+    // scheduler a spin-wait on a hardware counter has to BE the frame boundary, which
+    // is the reason that scheduler was chosen in the first place.
+    //
+    // Once per call-site visit, not once per read: vf10() reads VCount five times, so
+    // a naive version would run the boundary five times a frame. The guard wants a
+    // value that fails `> 180`, so the counter counts up from 0 and the spin resolves
+    // on its first iteration.
+    //
+    // What that costs, stated: the game uses VCount to time itself (s_swapLine,
+    // s_drawLine, s_frameEndLine, s_endLine are all GX_GetVCount()), so those numbers
+    // stop being scanlines and become "how many boundary visits we have had". Frame
+    // pacing itself comes from RAF, so nothing that decides when a frame ends depends
+    // on this.
+    // Declared here rather than including nitro/os/thread.h, which would close a
+    // cycle back into gx.h. It matches the SDK's signature for the wasm stub.
+    int pcWasmVCount(void);
+    // One call does the whole job: it runs the frame boundary if this is the first
+    // read this frame - so the five reads vf10() makes do not each trigger one - and
+    // returns a value that fails the `> 180` guard, which is what the real hardware
+    // would give at the point the game is asking.
+    return pcWasmVCount();
+#else
     return REG_VCOUNT;
+#endif
 }
 
 inline void GX_SetVisiblePlane(int plane) {

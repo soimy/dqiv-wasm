@@ -154,7 +154,15 @@ ARM void UnkSoundSystem::unkfunc_02086634()
     if (unk_a0 != 0) {
         func_02075aa4(0x14, unk_04);
     }
+#ifndef __EMSCRIPTEN__
     func_020741d0(3);
+#endif
+    // Measured, and this is why: the capture thread it starts blocks on
+    // `while (mq->usedCount == 0) { ... OS_PauseThread(...) }` - it is waiting for a
+    // message from the DS sound-capture hardware, which a browser does not have. So on
+    // a single-threaded host the thread parks at the frame boundary forever and the
+    // game never gets past its own first frame. What that costs, stated: whatever the
+    // game does with captured sound is unavailable in the browser.
     func_02073370(0, 5);
     func_02073370(1, 5);
     func_02073370(2, 5);
