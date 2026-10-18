@@ -39,6 +39,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance=1;
 // Defined in wasm/src/gpu-selfcheck.cpp, which is not in cmake/Sources.cmake, so
 // the MSVC build neither sees the call nor the definition.
 namespace pc {void gpuSelfCheck(GameWindow&,GxTextures&);}
+// Defined in wasm/src/port-stubs.cpp: the frame boundary is armed by this callback, so
+// exactly one boundary runs per game frame instead of once per VCount read.
+namespace pc {void wasmBoundaryArm();}
 #endif
 extern "C" {
 #include <nitro/os/thread.h>
@@ -201,6 +204,12 @@ struct GameRun {
         if(!overlays.load(38)) throw std::runtime_error("Cannot construct main game module");
         pc::setFrameCallback([this] {
             pc::ProfileScope frameTiming("render-callback");
+#ifdef __EMSCRIPTEN__
+            pc::wasmBoundaryArm();   // the next read is the boundary of the next frame
+            // One print a second, so the frame rate stays readable without flooding the journal.
+            static unsigned callbackCount=0;
+            if(++callbackCount%60==0) std::cout<<"  frame callback: swaps "<<geometry.swaps()<<" triangles "<<geometry.triangles().size()<<"\n";
+#endif
             if(geometry.swaps()!=renderedSwap) {
                 renderedSwap=geometry.swaps();
                 auto state=geometry.raster;

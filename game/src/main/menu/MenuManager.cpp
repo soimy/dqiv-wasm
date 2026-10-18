@@ -75,10 +75,9 @@ THUMB int MenuManager::isRequesting()
 
 THUMB void MenuManager::execute()
 {
-    // Measured, because the browser stops inside this function: the stage before it in
-    // UnkMenuSystem prints nothing at all, so this call never returns. Naming each
-    // decision so the last one that speaks is the one before the block.
-    auto stage=[&](const char* what){std::cout<<"  MenuManager::execute stage: "<<what<<"\n";};
+    // The stage probes are off: they cost CPU on every frame, and every stage they
+    // named is now confirmed to return.
+    auto stage=[&](const char* what){(void)what;};
     stage("entered");
     if (data_0210bc40.unkfunc_02058380() == 1) {
         stage("check 02058380 returned 1");

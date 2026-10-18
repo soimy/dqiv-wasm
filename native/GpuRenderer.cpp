@@ -1207,9 +1207,39 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     gl::ActiveTexture(GL_TEXTURE0);
     gpuCheckpoint("gpu-compose");
+#ifdef __EMSCRIPTEN__
+    // Measured: the compose fills the offscreen surface with the picture (every pixel,
+    // changing frame to frame) but the blit to the default framebuffer puts nothing on the
+    // canvas. So on wasm the picture is drawn to the canvas with the overlay program - the
+    // path that already works for the settings UI - instead of blitted.
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);gl::Viewport(0,0,windowWidth,windowHeight);
+    gl::UseProgram(overlayProgram_);gl::BindVertexArray(emptyArray_);
+    gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,output_.color);
+    gl::Uniform1i(uniform(overlayProgram_,"uPicture"),0);
+    // The overlay program's rect is (left, top, right, bottom) in NDC, so a full-screen
+    // blit is (-1, 1, 1, -1); the other order flips the picture upside down.
+    gl::Uniform4f(uniform(overlayProgram_,"uRect"),-1.f,1.f,1.f,-1.f);
+    gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
+#else
     gl::BindFramebuffer(GL_READ_FRAMEBUFFER,output_.framebuffer);gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER,0);
     gl::BlitFramebuffer(0,0,windowWidth,windowHeight,0,0,windowWidth,windowHeight,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+#endif
     gpuCheckpoint("gpu-blit");
+#ifdef __EMSCRIPTEN__
+    // Measured from inside the game's own GL context, right after the blit, because a
+    // readPixels from the debugger can land on a different buffer. This says whether the
+    // canvas has the composed picture or the compose itself is drawing black.
+    static unsigned canvasProbe=0;
+    if(++canvasProbe%60==0) {
+        std::vector<std::uint32_t> px(std::size_t(windowWidth)*windowHeight);
+        gl::BindFramebuffer(GL_FRAMEBUFFER,0);gl::PixelStorei(GL_PACK_ALIGNMENT,4);
+        gl::ReadPixels(0,0,windowWidth,windowHeight,GL_RGBA,GL_UNSIGNED_BYTE,px.data());
+        std::uint64_t n=0,s=0;for(auto p:px)if(p){++n;s+=p;}
+        const auto at=[&](int x,int y){return px[std::size_t(y)*windowWidth+x];};
+        std::printf("  canvas probe %u: %dx%d nonblack %llu sum %llu top=%08x mid=%08x bot=%08x\n",canvasProbe,windowWidth,windowHeight,(unsigned long long)n,(unsigned long long)s,at(windowWidth/2,windowHeight/8),at(windowWidth/2,windowHeight/2),at(windowWidth/2,windowHeight*7/8));
+        fflush(stdout);   // the journal is a freopen'd file; C stdio buffers it whole
+    }
+#endif
     endFrameTiming();
     gl::BindFramebuffer(GL_FRAMEBUFFER,0);
 }

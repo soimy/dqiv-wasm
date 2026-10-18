@@ -124,21 +124,8 @@ ARM void GlobalDQ4::unkfunc_0205815c(UnkGameTask* task)
 ARM void GlobalDQ4::unkfunc_02058188(UnkGameTask* task)
 {
     task->vf08();
-#ifdef __EMSCRIPTEN__
-    // Measured, because the stage print after this function never appears: the three
-    // virtuals on the current task are all empty in the decompiled source, so an empty
-    // function not returning means my vtable mapping is wrong, and I would rather find
-    // that out than assume it.
-    std::cout<<"  unkfunc_02058188: vf08 returned\n";
-#endif
     task->vf0c();
-#ifdef __EMSCRIPTEN__
-    std::cout<<"  unkfunc_02058188: vf0c returned\n";
-#endif
     task->vf10();
-#ifdef __EMSCRIPTEN__
-    std::cout<<"  unkfunc_02058188: vf10 returned\n";
-#endif
 }
 
 ARM void UnkGameTaskHook::vf00()

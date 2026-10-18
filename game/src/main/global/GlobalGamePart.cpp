@@ -131,31 +131,15 @@ ARM void GlobalGamePart::vf10()
 
 ARM void GlobalGamePart::vf0c()
 {
-    // Measured, because this is where the browser stops now: unkfunc_02058188's vf08
-    // returns and vf0c does not, so the stop is inside the game's own execute step.
-    // Naming each call so the last one that speaks is the one before the block. The
-    // count cap is off now - every link before unkfunc_02052464() is confirmed to
-    // return, so a cap was hiding the answer.
-    auto stage=[&](const char* what){std::cout<<"  vf0c stage: "<<what<<"\n";};
-    // Measured, and this is why the print is on the FIRST line: every stage after it
-    // prints (tick, the clock, the frame boundary, the portable thread) so every call
-    // before unkfunc_02052464() is confirmed to return - yet the print on the first line
-    // of that function does not appear. So this line is the one that has an answer that
-    // does not depend on any other link in the chain.
-    std::cout<<"  vf0c: ENTERED\n";
     int index = (unkfunc_02081254() & 1) ? 0 : 1;
-    stage("tick");
     s_tickLog[index][0] = unkfunc_0207e7e8();
     s_lineLog[index][0] = GX_GetVCount();
     unkfunc_02052464();
-    stage("gx fifo");
     TextAPI::unkfunc_02054884();
-    stage("text api");
     if (unkfunc_0203f210()) {
         onExecutePart();
         unkfunc_0203f1a8();
     }
-    stage("parts executed");
     s_tickLog[index][1] = unkfunc_0207e7e8();
     s_lineLog[index][1] = GX_GetVCount();
 #ifdef DQIV_NATIVE

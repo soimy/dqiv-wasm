@@ -22,6 +22,7 @@ extern "C" {
 #include "snd/snd_internal.h"   // UnkList, for the stream thread's work predicate (path 2)
 }
 #include <algorithm>
+#include <csetjmp>   // the jump pair that lets a portable thread park and give the turn back
 #include <cstring>
 #include <functional>
 #include <fstream>
@@ -63,7 +64,17 @@ void SaveStore::write(std::uint32_t offset, std::span<const std::uint8_t> source
 namespace pc {
 namespace {
 std::function<void()> idleHandler;   // what NitroThreads::setIdleHandler stores
+bool boundaryArmed=true;   // a boundary is due: set by the frame callback, cleared when it runs
+// The coroutine state for the SDK's threads. It lives here because the park point is in
+// OS_PauseThread below, which is where a thread hands the turn back.
+struct PortableThread { OSThread* sdk; void (*function)(void*); void* argument; bool runnable; bool started; jmp_buf resume; };
+PortableThread portableThreads[16];
+unsigned portableCount=0;
+jmp_buf schedulerReturn;
+bool insideThread=false;
+PortableThread* currentThread=nullptr;
 }
+void wasmBoundaryArm() { boundaryArmed=true; }   // called by GameBoot's frame callback
 }
 extern "C" {
 void OS_LockMutex(OSMutex*) {}
@@ -77,7 +88,16 @@ void OS_PauseThread(OSThreadQueue* queue) {
     // semantics. A real queue pointer means "a thread is waiting": nothing to do here,
     // readiness is detected by the scheduler. A null queue is the frame boundary itself,
     // which is what pcWasmVCount() asks for.
-    if (queue) { return; }
+    if (queue) {
+        // A portable thread parks here. Its body never returns, so this is where the turn
+        // goes back to the scheduler; the matching longjmp is in resumeThread(). A thread
+        // that is resumed comes back through this same point and continues its body.
+        if (pc::insideThread && pc::currentThread) {
+            if (setjmp(pc::currentThread->resume) == 0) longjmp(pc::schedulerReturn, 1);
+            // Resumed by the scheduler: the body continues from here.
+        }
+        return;
+    }
     // This is the frame boundary on a single-threaded host. The game's own code
     // calls it when it wants to wait for the next frame, so what the Windows build
     // does on an idle thread happens here instead, and the threads the SDK creates
@@ -87,12 +107,15 @@ void OS_PauseThread(OSThreadQueue* queue) {
     // GX_GetVCount() on wasm now reaches the boundary through this function, and
     // GlobalGamePart::vf10() reads VCount five times, so without the guard the
     // boundary would run five times a frame.
-    static unsigned frameId = 0;
-    static unsigned lastRun = ~0u;
-    if (lastRun == frameId) return;
-    lastRun = frameId;
-    ++frameId;
-    if(pc::idleHandler) { std::cout<<"  boundary: idle handler\n"; pc::idleHandler(); std::cout<<"  boundary: idle handler returned\n"; }
+    //
+    // The guard is armed by the frame callback, so exactly one boundary runs per game
+    // frame - the first read after the last swap - and every other read is a plain
+    // read that returns without running the idle handler. Measured before this: the
+    // boundary ran 28 times a frame, so pace() waited 28 times and the game got about
+    // 3 frames a second instead of the 60 the browser gives it.
+    if (!pc::boundaryArmed) return;
+    pc::boundaryArmed = false;
+    if(pc::idleHandler) { pc::idleHandler(); }
     pc::runPortableThreads();
 }
 int pcWasmVCount(void) {
@@ -171,9 +194,7 @@ extern "C" void func_02079e24(unsigned char* destination) {
 extern "C" { extern char data_02113480[]; }   // the stream thread global, defined in snd_arcstrm.c
 namespace pc {
 namespace {
-struct PortableThread { OSThread* sdk; void (*function)(void*); void* argument; bool runnable; };
-PortableThread portableThreads[16];
-unsigned portableCount=0;
+// The coroutine state lives at the top of the file, where OS_PauseThread can see it.
 PortableThread* find(OSThread* sdk) {
     for(unsigned i=0;i<portableCount;++i) if(portableThreads[i].sdk==sdk) return &portableThreads[i];
     return nullptr;
@@ -194,23 +215,30 @@ bool hasWork(const PortableThread& t) {
     for(const auto& p : workPredicates) if(p.sdk==t.sdk) return p.hasWork(t);
     return true;   // no predicate: run when marked runnable, as before
 }
+void resumeThread(PortableThread& t) {
+    insideThread=true;currentThread=&t;
+    if(setjmp(schedulerReturn)==0) {
+        if(t.started) longjmp(t.resume,1);   // continue at its park point
+        else { t.started=true; t.function(t.argument); }   // first run, from the top
+    }
+    insideThread=false;currentThread=nullptr;   // back here because the thread parked
+}
 }
 void runPortableThreads() {
     // Measured, because the browser stops inside the frame boundary now: GX_GetVCount()
     // on wasm reaches this, and the print before it in GlobalGamePart::vf0c() is the
     // last one that speaks. So the boundary runs and does not come back. Naming which
     // part of it blocks.
-    std::cout<<"  runPortableThreads: "+std::to_string(portableCount)+" threads\n";
+    //
+    // The per-frame prints are gone: at 60 frames a second they cost enough CPU that
+    // the main thread never gives the debugger a gap, and the journal grew faster than
+    // anything could read it.
     for(unsigned i=0;i<portableCount;++i) {
         auto& thread=portableThreads[i];
         if(thread.runnable&&thread.function) {
-            if(!hasWork(thread)) {
-                std::cout<<"    thread "+std::to_string(i)+" skipped, no work\n";
-                continue;
-            }
-            std::cout<<"    thread "+std::to_string(i)+" running\n";
-            thread.runnable=false;thread.function(thread.argument);
-            std::cout<<"    thread "+std::to_string(i)+" returned\n";
+            if(!hasWork(thread)) continue;
+            thread.runnable=false;
+            resumeThread(thread);
         }
     }
 }
