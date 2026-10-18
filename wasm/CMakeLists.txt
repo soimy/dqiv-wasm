@@ -97,6 +97,9 @@ target_link_libraries(dqiv_nitro_system PUBLIC dqiv_core)
 dqiv_portable_sources(${DQIV_ROOT} DQIV_PORTABLE)
 add_library(dqiv_portable STATIC ${DQIV_PORTABLE})
 target_link_libraries(dqiv_portable PUBLIC dqiv_core)
+# Path 2 needs UnkList from snd_internal.h to tell whether the stream thread has a
+# queued request. That header is not on dqiv_core's PUBLIC path, so ask for it here.
+target_include_directories(dqiv_portable PRIVATE ${DQIV_ROOT}/game/libs/NitroSystem/src)
 
 # Proof that the whole decompiled game links into one wasm module: it runs a real
 # decompiled function (dss::arrayToIndex) and reports the layout sizes.

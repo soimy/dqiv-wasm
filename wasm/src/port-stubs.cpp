@@ -12,12 +12,14 @@
 #include "NitroOverlays.hpp"
 #include "NitroVideo.hpp"
 #ifdef __EMSCRIPTEN__
+#include <emscripten.h>   // emscripten_sleep, which is what makes a parked thread yield
 #include <iostream>
 #include <string>
 #endif
 extern "C" {
 #include <nitro/os/thread.h>
 #include <nitro/os/mutex.h>
+#include "snd/snd_internal.h"   // UnkList, for the stream thread's work predicate (path 2)
 }
 #include <algorithm>
 #include <cstring>
@@ -66,7 +68,16 @@ std::function<void()> idleHandler;   // what NitroThreads::setIdleHandler stores
 extern "C" {
 void OS_LockMutex(OSMutex*) {}
 void OS_UnlockMutex(OSMutex*) {}
-void OS_PauseThread(OSThreadQueue*) {
+void OS_PauseThread(OSThreadQueue* queue) {
+    // Path 2, decided after two measurements: emscripten_sleep(0) does NOT unwind
+    // (the journal stops after one frame), and emscripten_set_main_loop fires once
+    // because main() returns. So the scheduler cannot park a thread mid-call; instead
+    // runPortableThreads() skips a thread when it has no work, and the thread gets its
+    // turn exactly when work exists - which is the game's own "park to request arrival"
+    // semantics. A real queue pointer means "a thread is waiting": nothing to do here,
+    // readiness is detected by the scheduler. A null queue is the frame boundary itself,
+    // which is what pcWasmVCount() asks for.
+    if (queue) { return; }
     // This is the frame boundary on a single-threaded host. The game's own code
     // calls it when it wants to wait for the next frame, so what the Windows build
     // does on an idle thread happens here instead, and the threads the SDK creates
@@ -157,6 +168,7 @@ extern "C" void func_02079e24(unsigned char* destination) {
 // what runPortableThreads() does, once per frame, from the frame loop. The stack
 // and priority the caller passes are recorded and unused: there is one stack, the
 // wasm one, and one thread of control.
+extern "C" { extern char data_02113480[]; }   // the stream thread global, defined in snd_arcstrm.c
 namespace pc {
 namespace {
 struct PortableThread { OSThread* sdk; void (*function)(void*); void* argument; bool runnable; };
@@ -165,6 +177,22 @@ unsigned portableCount=0;
 PortableThread* find(OSThread* sdk) {
     for(unsigned i=0;i<portableCount;++i) if(portableThreads[i].sdk==sdk) return &portableThreads[i];
     return nullptr;
+}
+// Path 2: the scheduler skips a thread that has no work, so it can return. The game's
+// own semantics are "park until a request arrives", so a thread's turn is exactly when
+// it has work. Threads with no predicate keep the old behaviour (run when marked
+// runnable); the stream thread gets one below, keyed by the SDK pointer its caller
+// passed to func_020787c4. Its argument is the UnkSndArcStrmThread* itself, whose
+// requestList sits at 0x4E0, and UnkList.numObjects is at 0x08 - so numObjects>0 means
+// a request is queued and the thread should get its turn.
+bool streamHasWork(const PortableThread& t) {
+    return reinterpret_cast<UnkList*>((char*)t.argument + 0x4E0)->numObjects > 0;
+}
+struct WorkPredicate { const void* sdk; bool (*hasWork)(const PortableThread&); };
+WorkPredicate workPredicates[] = { {&data_02113480[0], streamHasWork} };
+bool hasWork(const PortableThread& t) {
+    for(const auto& p : workPredicates) if(p.sdk==t.sdk) return p.hasWork(t);
+    return true;   // no predicate: run when marked runnable, as before
 }
 }
 void runPortableThreads() {
@@ -176,6 +204,10 @@ void runPortableThreads() {
     for(unsigned i=0;i<portableCount;++i) {
         auto& thread=portableThreads[i];
         if(thread.runnable&&thread.function) {
+            if(!hasWork(thread)) {
+                std::cout<<"    thread "+std::to_string(i)+" skipped, no work\n";
+                continue;
+            }
             std::cout<<"    thread "+std::to_string(i)+" running\n";
             thread.runnable=false;thread.function(thread.argument);
             std::cout<<"    thread "+std::to_string(i)+" returned\n";
