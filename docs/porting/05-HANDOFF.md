@@ -66,6 +66,33 @@ resume 进去。`emscripten_sleep(0)` 让 `main()` 留在循环里 —— **也�
 我倾向 2，因为它是唯一不需要"主循环真的转起来"这条前置条件的，而这条前置条件已经被
 两次测量否定了。
 
+## 路 2 已实现，并且量到了（本次，commit 2aeb8bc）
+
+**路 2 成立，判据全过。** `runPortableThreads()` 现在在流线程的 `requestList` 空
+（`numObjects==0`）时**跳过**它，于是调度器能返回、`OS_Wait()` 能返回、游戏自己的
+`while (nativeStep()) OS_Wait()` 循环就能走到 frame 1。Chrome 实测（3 次采样逐字节相同）
+journal 现在走：`unkfunc_02052464: ENTERED` → `MenuManager::execute stage: entered` →
+`past the early returns` → `MenuPart initialize: start` → `Scene 0, frame 0` →
+`nativeStep call 1`。所以"调度器必须能返回"这条机理判据满足了。
+
+实现：`PortableThread` 加一个按 SDK 线程指针查表的 `hasWork` 谓词；流线程的谓词读
+`argument+0x4E0`（requestList）的 `numObjects`（`UnkList` 来自 `snd_internal.h`，所以给
+`dqiv_portable` 加了 `game/libs/NitroSystem/src` 的 include dir）。`OS_PauseThread` 的
+sleep 拆分撤回普通 no-op（真队列指针 = 让调度器自己判断就绪，不靠 sleep）；include 留着
+（无害，路 2 要用 `UnkList`）。`OS_UnpauseThread` 保持 no-op：就绪由 `hasWork` 检测，
+所以线程恰在有活时轮到，这正是游戏自己的语义。
+
+**新的停止点**：`nativeStep call 1` 之后三个采样又逐字节相同 —— 链又静止了，但这次是
+**走过了场景切换**（`Scene 11 → Scene 0`）之后才停。画布 `nonblack=0`（自检三角形没了，
+游戏清屏后还没画东西，和 `render3d` 在 fog 早返回一致）。下一个要查的是这个新停止点，不是路 2。
+
+**EU ROM（`DQ4eu.nds`，用户放的）比中文 ROM 走得更远**，是更好的测试 ROM：pack **5265 文件**
+（中文 ROM 4789），journal 走完 `MenuPart initialize: start` → `logo 0 built` → `logo 1 built`
+→ `fade in black` → `MenuPart initialize: done` → `new task initialize done` → **`frame 1`**
+→ `Scene 0, frame 1` → `nativeStep call 1`。所以判据里的 `frame 1` 在 EU ROM 上真出现了，
+`MenuPart initialize` 也真走完了（中文 ROM 停在 `logo 0`，缺 logo 资产）。三个采样仍逐字节
+相同 —— 停在 frame 1 之后。所以下一个停止点 = frame 1 之后的渲染，不是路 2。
+
 ## 决定性测量（这是接手时最该知道的事实）
 
 浏览器实测（Chrome + CDP，真墙钟时间，不是 `--dump-dom`）：
@@ -121,10 +148,11 @@ resume 进去。`emscripten_sleep(0)` 让 `main()` 留在循环里 —— **也�
 
 ## 下一步（确切命令 + 成功判据）
 
-**先拍上面那个设计岔路**（三条路里选一条）。`port-stubs.cpp` 的 yield 拆分已经编好、
-已经量过、**结论是否定**（见"本次量到的决定性结果"那节）—— 它现在是一个"量到了、但没让
-事情变好"的实验：要么按路 2 改 `runPortableThreads()`、把 sleep 撤掉；要么保留 sleep 并
-解决"主循环真的被驱动"这条前置条件。
+**先拍上面那个设计岔路**（三条路里选一条）。→ **已拍路 2 并实现，见上面"路 2 已实现"那节。**
+`port-stubs.cpp` 的 yield 拆分已撤成普通 no-op（真队列指针让调度器自己判断就绪），路 2 的
+`hasWork` 谓词已编好、已量到、判据全过。Windows 裁判：`GlobalGamePart.cpp`/`MenuManager.cpp`
+的探针收尾动了反编译源，确认 763 条 warning 逐字节不变（`port-stubs.cpp` 是 wasm-only，
+不影响 Windows）。
 
 **改完之后的确切跑法**（都是跑通过的）：
 ```
@@ -203,7 +231,8 @@ wasm-only，不影响 Windows。
   MEMFS/heap 测量、Chrome 缓存、新 tab 要求、VCount 缺口、M5 浏览器侧已完成、
   协作调度器可用、画布只有自检三角形、capture 线程被移除、`--Map`。
   建议顺序写成 `M2(✅) → M4(大部分✅) → M3a(✅) → 签名(✅) → M5(浏览器侧✅) →
-  M6/M7(现在卡这里，声音系统的线程) → M3b → ...`。
+  协作调度器(✅ 路 2，2aeb8bc) → 现在卡这里：场景切换后停止（画布只有清屏，render3d 在
+  fog 早返回）→ M6/M7 → M3b → ...`。
 
 ## 关键约束与已验证事实（省得重新推导）
 
