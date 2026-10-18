@@ -68,6 +68,14 @@ wasm 没有 `/FI` 也没有 `init_seg`，所以 `UnkDisplay` 的 ctor 在 `__was
 
 ## M4 WebGL2 / GLES 3.0 渲染后端 + Emscripten 启动壳（1–2 周，最大的一块）
 
+**状态（2026-10-18，`a6691ba`，CI 绿 ✓）：跑通了。** 画面到画布了——合成面几乎每个像素都有
+内容、逐帧变化，画布和它逐点一致；帧率 ~30 fps；游戏自己的 `while(nativeStep()) OS_Wait()`
+循环能过 boot logo、进开始动画。这一轮是三件事：SDK 线程的 park 用一对 `setjmp/longjmp`
+真的交回控制权（`emscripten_sleep(0)` 实测不能 unwind，线程体永不返回）——音频路径因此通了；
+帧边界由 frame callback 装填，每帧恰好一次（原来是每次 VCount 读数都跑一次边界，所以 `pace()`
+每帧等 28 次，只有 ~3 fps）；`BlitFramebuffer` 到默认 framebuffer 在 WebGL2 上什么都不写，
+所以 wasm 上改用 overlay 程序全屏贴图。读数见 `05-HANDOFF.md`。
+
 - [x] `GlLoader`：按 GLES 3.0 逐个核过入口点表，5 个不在表里的已从表里拿掉，现在保留 `gl::load()` 的"缺一即抛"
 - [x] 着色器：8 处 `#version 330 core` → `#version 300 es` + 精度限定符。逐条核过，
       ES 3.00 唯一缺的是 `gl_ClipDistance`，改成 varying + 片元 `discard`，开关用一个
@@ -232,7 +240,7 @@ M4 里顺手做的 4 个 hedge（成本几乎为零，让 M4b 不用返工）—
 
 ## 建议顺序
 
-`M2(✅) → M4(大部分✅) → M3a(✅) → 签名不匹配 → M3b → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
+`M2(✅) → M4(跑通✅) → M3a(✅) → 签名不匹配 → M3b → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
 
 **顺序改过两次，都是实测逼的，不是计划。** 第一次：静态初始化——MSVC 的 `init_seg` 头让游戏的
 全局 ctor 在 `main()` 里加载 overlay 38 时才跑，wasm 上没有这个机制，所以 M3 从"以后的里程碑"

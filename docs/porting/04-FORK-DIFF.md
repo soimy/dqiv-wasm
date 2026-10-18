@@ -18,13 +18,15 @@ Windows 侧的**行为**逐条验过：两个平台各配置一次、和 HEAD �
 且每个目标内部的源文件顺序（包括 Windows-only 文件的位置）保持原样，链接顺序不变。
 唯一的可见变化是生成的 `.vcxproj` 里源文件路径变成绝对路径。
 
-## 源码改动（3 处，Windows 行为不变）
+## 源码改动（5 处，Windows 行为不变）
 
 | 文件 | 改动 | 原因 |
 | --- | --- | --- |
 | `game/src/ov015/btl/BattleSelectTarget.cpp` | 给三个 `switch` case 加花括号 | case 跳过了变量初始化，MSVC 容忍，Clang/GCC 直接报错。语义完全不变 |
 | `native/GameServices.cpp` | `isGameTextPointer()` 的 `VirtualQuery`/线程栈/PE 镜像判断用 `#ifdef _WIN32` 包起来，非 Windows 在分配表检查后返回 `false` | 该启发式依赖 Win32 地址空间；Windows 路径一字未动 |
 | `native/Parallel.hpp`（新增）+ `native/Display.cpp`、`native/GpuRenderer.cpp` | 3 处 `std::for_each(std::execution::par, …)` 改用 `DQIV_PARALLEL_FOR_EACH` 宏 | libc++（macOS/iOS/Android/wasm32）没有并行算法实现；宏在 MSVC 上仍是 `std::execution::par`，可用 `DQIV_NO_PARALLEL` 强制串行 |
+| `native/GameBoot.cpp` | frame callback 里加 `pc::wasmBoundaryArm()`（`#ifdef __EMSCRIPTEN__` 内），加每秒一次的帧率打印 | 帧边界由这个 callback 装填，所以每帧恰好跑一次边界而不是每次 VCount 读数一次。`wasmBoundaryArm` 定义在 `wasm/src/port-stubs.cpp`。Windows 路径一字未动 |
+| `native/GpuRenderer.cpp`（`present()`） | `BlitFramebuffer` 到默认 framebuffer 那段包进 `#ifdef __EMSCRIPTEN__`；wasm 上改用 overlay 程序把合成面全屏贴图 | 实测 `BlitFramebuffer` 到默认 framebuffer 在 WebGL2 上什么都不写。overlay 的顶点着色器把 v 反转（它为存成顶向下的界面贴图而设计），所以全屏矩形必须给成 (left, top, right, bottom)。Windows 走原来的 blit |
 
 ## 构建改动（M2，Windows 行为不变）
 

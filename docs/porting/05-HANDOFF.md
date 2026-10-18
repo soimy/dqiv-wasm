@@ -395,3 +395,40 @@ gh run view <id> -R soimy/dqiv-wasm --log | grep -oE "warning C[0-9]+" | sort | 
 - namespace 作用域的 `const` 在 C++ 里是**内部链接** —— 跨 TU 必须 `extern`。
 - 匿名 namespace 里的 `gpuTrace` 是内部链接 → 在 `GpuRenderer.hpp` 的 `namespace pc` 里
   `extern bool gpuTrace;`，cpp 里定义在匿名 namespace **外面**。
+
+## 这一轮（10-18 晚）：画面到画布了，游戏进了开始动画
+
+提交 `a6691ba`，**CI 绿 ✓**（run 26）→ 763 条 MSVC warning 逐字节和基线一致。这轮动了
+`GameBoot.cpp`、`GpuRenderer.cpp` 和 4 个 `game/src/**`（后三者都是拆探针），所以必须走 CI。
+
+**三个真修复，不是探针：**
+
+1. **SDK 线程的 park 必须真的交回控制权。** `func_020771b4`（声音流线程体）是
+   `while(TRUE){ park; 处理请求 }`，它**永不返回**。所以"有活才给它回合"（path 2）只是让它
+   别被调用；一旦有活、被调用，它就再也不会回来。`emscripten_sleep(0)` 实测不能在这里
+   unwind，所以 park 是一对 `setjmp/longjmp`：调度器 `setjmp`，线程体在 park 点 `longjmp`
+   回来；下次给它回合时**从 park 点继续**，不是从头重跑。**音频路径因此通了，游戏过了
+   logo 进开始动画。**
+2. **帧边界的守卫是坏的。** 原来 `if(lastRun==frameId)return; lastRun=frameId; ++frameId;`
+   永远不相等 → 每次 `pcWasmVCount()` 都跑边界 → 实测每帧 28 次 → `pace()` 每帧等 28 次 →
+   ~3 fps。现在由 frame callback 装填（`pc::wasmBoundaryArm()`），每帧恰好一次 → **~30 fps**。
+3. **`BlitFramebuffer` 到默认 framebuffer 在 WebGL2 上什么都不写。** 合成面是好的（几乎每个
+   像素都有内容、逐帧变化），画布是纯黑。改成用 overlay 程序把合成面当贴图全屏画，画布立刻
+   逐点一致。**overlay 顶点着色器里 `vPosition=(x, 1.0-y)` 是为界面贴图（存成顶向下）准备
+   的，所以全屏矩形必须给成 `(left, top, right, bottom)`，否则画面上下颠倒。**
+
+**实测读数（EU ROM `DQ4eu.nds`，真 Chrome，cache disabled）：**
+
+- 合成面 vs 画布，同一帧：`nonblack 3129936`（= 2364×1324，几乎全满），`sum` 两边一模一样，
+  `top/mid/bot` 三个采样点一模一样 → 画布拿到了合成面。
+- 帧 180-240 的采样点是 `ff000000`（黑），帧 272 `Scene 12`，帧 300 起有颜色 → **logo 后转
+  黑场、开始动画第一帧**这个黑是游戏自己的淡入，不是渲染丢了。
+- 帧率 ~30 fps（探针每 60 帧打一次，20 秒里 +10 → 600 帧 / 20 秒）。
+
+**留下的读数工具：** `native/GpuRenderer.cpp` 里的 canvas 探针（每 60 帧一次，在
+`#ifdef __EMSCRIPTEN__` 内，CI 安全）——它是唯一可靠的"画布上有没有东西"读数，因为从调试器
+`readPixels` 会读到别的 buffer。测量端是 `/tmp/cdp-raf.mjs`（RAF 回调里采样，理由同上）。
+
+**下一件事：** 开始动画之后是什么，以及 `fogged_` 那条路——`render3D` 的 prepare 循环现在
+2 个三角形全过（boot logo），`fogApplied_` 的早退在无雾时是正常的（回落到 `scene_[slot].color`），
+所以它不是拦路。真正要盯的是场景里的东西多起来之后，prepare 循环和 `readNative` 还成不成。
