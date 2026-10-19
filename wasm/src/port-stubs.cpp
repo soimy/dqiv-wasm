@@ -73,6 +73,16 @@ PortableThread portableThreads[16];
 unsigned portableCount=0;
 unsigned pauseQueueCalls=0;    // how often the game parks on a queue
 unsigned unpauseCalls=0;       // and how often anything unpauses one
+// Per-queue accounting, so the blocking wait can name itself: the queue with parks and no
+// matching unpauses is the one the game is stuck on.
+struct QueueStat { unsigned queue; unsigned parks; unsigned unpauses; unsigned parkedBy; };
+QueueStat queueStats[16];
+unsigned queueStatCount=0;
+QueueStat* statFor(unsigned queue) {
+    for(unsigned i=0;i<queueStatCount;++i) if(queueStats[i].queue==queue) return &queueStats[i];
+    if(queueStatCount<16) {queueStats[queueStatCount]={queue,0,0,0}; return &queueStats[queueStatCount++];}
+    return nullptr;
+}
 jmp_buf schedulerReturn;
 bool insideThread=false;
 PortableThread* currentThread=nullptr;
@@ -94,6 +104,7 @@ void OS_PauseThread(OSThreadQueue* queue) {
     // which is what pcWasmVCount() asks for.
     if (queue) {
         pc::pauseQueueCalls++;
+        if(auto* st=pc::statFor((unsigned)queue)){ st->parks++; if(pc::insideThread&&pc::currentThread) st->parkedBy=(unsigned)pc::currentThread->sdk; }
         // A portable thread parks here. Its body never returns, so this is where the turn
         // goes back to the scheduler; the matching longjmp is in resumeThread(). A thread
         // that is resumed comes back through this same point and continues its body.
@@ -144,6 +155,7 @@ void OS_UnpauseThread(OSThreadQueue* queue) {
     // it got nothing: the thread stayed runnable=0 forever and the loop blocked right
     // after it answered the clock. Wake the head of the queue, which is what the SDK does.
     pc::unpauseCalls++;
+    if(queue) if(auto* st=pc::statFor((unsigned)queue)) st->unpauses++;
     auto* t = queue ? queue->head : nullptr;
     if(!t) return;
     queue->head = nullptr; queue->tail = nullptr;
@@ -264,6 +276,13 @@ void runPortableThreads() {
     if(++probeCount%60==0) {
         std::cout<<"  scheduler probe: "<<portableCount<<" threads"
                  <<" parks="<<pauseQueueCalls<<" unpauses="<<unpauseCalls;
+        // One line per queue we have ever seen, so the one with parks and no matching
+        // unpauses is the wait the game is stuck on.
+        for(unsigned i=0;i<queueStatCount;++i) {
+            auto& s=queueStats[i];
+            std::cout<<" q"<<std::hex<<s.queue<<std::dec<<" p"<<s.parks<<" u"<<s.unpauses
+                     <<" by"<<std::hex<<s.parkedBy<<std::dec;
+        }
         for(unsigned i=0;i<portableCount;++i) {
             auto& t=portableThreads[i];
             std::cout<<" ["<<i<<"] runnable="<<(t.runnable?1:0)
