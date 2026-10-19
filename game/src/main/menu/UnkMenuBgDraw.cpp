@@ -238,6 +238,10 @@ THUMB int unkfunc_02050900(int x, int y, int w, int h, int palette, int color, i
         unkfunc_0207f9b8(data_021098b8, left, y + offsetY, color, text, wrap);
         return left + unkfunc_02080100();
     }
+    // It used to fall off the end. On x86 that is undefined and the game has always
+    // lived with the garbage it gives back; in wasm it is a hard trap, unreachable.
+    // The value here is a guess - 0 is the least surprising thing to hand back.
+    return 0;
 }
 
 THUMB int unkfunc_02050c70(int x, int y, int w, int h, int palette, int color, int align, int font, int value)
@@ -249,6 +253,8 @@ THUMB int unkfunc_02050c70(int x, int y, int w, int h, int palette, int color, i
         unkfunc_02087f14(data_020c47d4, data_020c4894, number, sizeof(number), buf);
         return unkfunc_02050900(x, y, w, h, palette, color, align, font, (int)number, 0);
     }
+    // Same shape as unkfunc_02050900: the flag-off path had no return, so it trapped.
+    return 0;
 }
 
 THUMB void unkfunc_02050d00(int x, int y, int percent)
