@@ -233,6 +233,18 @@ void runPortableThreads() {
     // The per-frame prints are gone: at 60 frames a second they cost enough CPU that
     // the main thread never gives the debugger a gap, and the journal grew faster than
     // anything could read it.
+    // Measured, because the game stops right after it enters Scene 3: naming which
+    // threads exist and which have work is how we tell a parked thread from a dead loop.
+    static unsigned probeCount=0;
+    if(++probeCount%60==0) {
+        std::cout<<"  scheduler probe: "<<portableCount<<" threads";
+        for(unsigned i=0;i<portableCount;++i) {
+            auto& t=portableThreads[i];
+            std::cout<<" ["<<i<<"] runnable="<<(t.runnable?1:0)
+                     <<" started="<<(t.started?1:0)<<" work="<<(hasWork(t)?1:0);
+        }
+        std::cout<<"\n";
+    }
     for(unsigned i=0;i<portableCount;++i) {
         auto& thread=portableThreads[i];
         if(thread.runnable&&thread.function) {
