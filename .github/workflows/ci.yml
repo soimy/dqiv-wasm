@@ -88,3 +88,35 @@ jobs:
           echo "$out" | grep -q 'SDL_VideoInit'
           echo "$out" | grep -q 'Emscripten_CreateDevice'
           echo "$out" | grep -q 'window is not defined'
+
+  # Auxiliary reference, not a gate yet (decided 2026-10-19). Every answer it asserts was
+  # measured green under SwiftShader - Chrome's software GL, which is what a runner has - so
+  # this is a copy of a run that worked, not a hope. Flip continue-on-error to false when it
+  # earns gate status. It needs no ROM: the loader's "start without one" link runs the game
+  # with an empty pack, which is what GameBoot.cpp:134 allows on wasm, and the ROMs are never
+  # in git.
+  selfcheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install emsdk
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          cd "$RUNNER_TEMP/emsdk"
+          ./emsdk install 4.0.13
+          ./emsdk activate 4.0.13
+      - name: Build
+        run: |
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          ./wasm/build.sh
+      - name: Run the GPU self-check in headless Chrome
+        run: |
+          cd wasm/build
+          cp ../index.html .   # build.sh does not copy the page, so serve it by hand
+          python3 -m http.server 8111 &
+          google-chrome --headless=new --use-gl=angle --use-angle=swiftshader \
+            --remote-debugging-port=9333 --no-first-run --user-data-dir="$RUNNER_TEMP/hp" &
+          for i in $(seq 1 30); do curl -s "http://127.0.0.1:9333/json/version" | grep -q webSocketDebuggerUrl && break; sleep 2; done
+          node ../tools/selfcheck-ci.mjs --url http://localhost:8111/index.html --port 9333

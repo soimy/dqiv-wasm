@@ -238,6 +238,26 @@ M4 里顺手做的 4 个 hedge（成本几乎为零，让 M4b 不用返工）—
 
 **验收**：真机（含 64-bit-only 机型，走 M9）能玩。
 
+## FR-1 支持非 YIVP 的 ROM（中文/日文/美版）—— 游戏码放宽是一行，资源命名要按区域同步
+
+（2026-10-19 立。本 fork 的 GitHub issues 是关掉的，所以追踪记在这里；在上游误建的那条已关掉。）
+
+现在 `native/GameInstall.cpp:137` 硬要求游戏码等于 `YIVP`（欧版），所以中文 ROM 进不来。放宽
+本身是一行，但真正的活是命名——按名字查资源的地方（实测清点）：
+
+- `native/GameInstall.cpp:140` — 要求包里有 `data/SOUND/sound_data.sdat`，没有就抛
+- `native/GameBoot.cpp:134`（wasm，空包可跑）/ `:136`（Windows，抛）— 同一处名字
+- `native/GameInstall.cpp:104` — `data/SOUND/MOBILE/` 前缀
+- `native/MobileSound.cpp:152-160` — `snd_vol.dat`、`SE%04d.akb`、`BGM%02d.akb`
+- 反编译源里 ~16 个路径常量（`data/map`、`data/btlmap`）+ 几张名字表：`modelNameTable[19]`、
+  `animName[14]`、`pamName[]`、`s_menuName[]`、`names[SHOP_FILTER_COUNT][6]`
+
+这些名字就是 ROM 自己的文件表，区域不同就不同——所以中文 ROM 不是改一行，是把上面这一批按
+区域参数化。**门票：** 一个按区域的名字表 + 游戏码白名单，`GameInstall.cpp:137` 是其中最小的一块。
+
+**为什么先不做：** 整条路现在只在欧版 ROM 上测过（`DQ4eu.nds`；`DQ4chs.nds` 在场但没跑过）。等
+渲染层跑通、能看出"资源没找到"长什么样之后再动，不然改错了也不知道。
+
 ## 建议顺序
 
 `M2(✅) → M4(跑通✅) → M3a(✅) → 签名不匹配 → M3b → M5 → M6 → M7 → M8`，M9/M10 视需求另开分支。
