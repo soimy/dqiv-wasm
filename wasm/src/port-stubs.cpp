@@ -292,8 +292,11 @@ void runPortableThreads() {
     }
     for(unsigned i=0;i<portableCount;++i) {
         auto& thread=portableThreads[i];
-        if(thread.runnable&&thread.function) {
-            if(!hasWork(thread)) continue;
+        // Measured: `started=0`. The SDK creates and starts this thread, so its very first
+        // turn has to come unconditionally — demanding work from it first is a deadlock,
+        // because the thread has to run before it can have any work. After that, readiness
+        // is the game marking it runnable or the request queue holding something.
+        if(thread.function&&(!thread.started||thread.runnable||hasWork(thread))) {
             thread.runnable=false;
             resumeThread(thread);
         }
