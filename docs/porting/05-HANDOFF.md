@@ -432,3 +432,27 @@ gh run view <id> -R soimy/dqiv-wasm --log | grep -oE "warning C[0-9]+" | sort | 
 **下一件事：** 开始动画之后是什么，以及 `fogged_` 那条路——`render3D` 的 prepare 循环现在
 2 个三角形全过（boot logo），`fogApplied_` 的早退在无雾时是正常的（回落到 `scene_[slot].color`），
 所以它不是拦路。真正要盯的是场景里的东西多起来之后，prepare 循环和 `readNative` 还成不成。
+
+## 这一轮（10-19 上午）：大场景过了，卡住的是场景自己的帧号
+
+**上一轮那个"要盯的"，答案是好的。** EU ROM 跑 4 分钟，场景从 2 个三角形长到 **~1670 个**，
+`render3D` 的 prepare 循环和 `readNative` 在大场景下**照常工作**，没有 GL 错误
+（`read 1: 2436 lit, gl error 0x0`）。画布探针每 60 帧一次，报的是满屏活画面：
+`nonblack 354564`（= 756×469，每个像素都有）、`top/mid/bot` 逐帧不同 → 画面在动。
+
+**新的拦路点，是实测出来的，不是猜的：** 游戏自己的 `Scene`/`frame` 计数**停在
+`Scene 12, frame 272` 不动**（4 分钟里这一行没变过），而渲染循环和游戏自己的每帧任务链都在跑
+（`nativeStep` 计数 3653 → 20429，`swaps` 1140 → 6780）。也就是说：**渲染和任务都在跑，但场景的
+帧号不推进 → 开始动画永远不放完。** 下一步就是查这个帧号为什么不推进。
+
+**读数口径（别再踩）：** 从调试器在 RAF 回调里 `readPixels` 这次报 `nonblack=0`，而游戏内的画布
+探针报满屏——两者不是矛盾，是**采样时刻不同**（探针在读合成面刚画到画布的那一刻）。所以
+"画布上有没有东西"只认游戏内那个探针；RAF 端读数不能当证据。
+
+**CI 那条收尾了：** run 29（`8f32a14`）三个 job 全绿，selfcheck `PASS`、六条断言数字和本机
+一模一样，而且**没有** SwiftShader 弃用警告了——按 Chrome 自己要求的 `--enable-unsafe-swiftshader`
+改，是对的。selfcheck 仍是辅助参考（`continue-on-error: true`），要不要当 gate 以后再说。
+
+**新规矩（用户定的）：** 用 headless Chrome 做验证，每轮结束要确认自己起的进程关干净。这轮
+结束时 `/tmp/hp-long` 下剩 0 个进程，用户自己的 Chrome 没动。**坑：`grep -c` 会把 grep 自己
+那行也算进去**（它报 3，实际是 0）——数进程一定要 `grep -v grep`。
