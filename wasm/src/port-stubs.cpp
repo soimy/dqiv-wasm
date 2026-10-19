@@ -71,9 +71,12 @@ bool boundaryArmed=true;   // a boundary is due: set by the frame callback, clea
 struct PortableThread { OSThread* sdk; void (*function)(void*); void* argument; bool runnable; bool started; jmp_buf resume; };
 PortableThread portableThreads[16];
 unsigned portableCount=0;
+unsigned pauseQueueCalls=0;    // how often the game parks on a queue
+unsigned unpauseCalls=0;       // and how often anything unpauses one
 jmp_buf schedulerReturn;
 bool insideThread=false;
 PortableThread* currentThread=nullptr;
+PortableThread* find(OSThread* sdk);   // defined below with the rest of the registry; OS_UnpauseThread needs it early
 }
 void wasmBoundaryArm() { boundaryArmed=true; }   // called by GameBoot's frame callback
 }
@@ -90,11 +93,18 @@ void OS_PauseThread(OSThreadQueue* queue) {
     // readiness is detected by the scheduler. A null queue is the frame boundary itself,
     // which is what pcWasmVCount() asks for.
     if (queue) {
+        pc::pauseQueueCalls++;
         // A portable thread parks here. Its body never returns, so this is where the turn
         // goes back to the scheduler; the matching longjmp is in resumeThread(). A thread
         // that is resumed comes back through this same point and continues its body.
         if (pc::insideThread && pc::currentThread) {
-            if (setjmp(pc::currentThread->resume) == 0) longjmp(pc::schedulerReturn, 1);
+            // The SDK links the thread onto this queue before it suspends, and an unpause
+            // looks threads up by that link. So the link has to exist before the turn goes
+            // back, otherwise the game queues work, unpauses, and gets nothing.
+            auto* t = pc::currentThread;
+            queue->head = t->sdk; queue->tail = t->sdk;
+            t->sdk->queue = queue; t->sdk->list.next = nullptr; t->sdk->list.prev = nullptr;
+            if (setjmp(t->resume) == 0) longjmp(pc::schedulerReturn, 1);
             // Resumed by the scheduler: the body continues from here.
         }
         return;
@@ -129,7 +139,17 @@ int pcWasmVCount(void) {
     OS_PauseThread(0);
     return 0;
 }
-void OS_UnpauseThread(OSThreadQueue*) {}
+void OS_UnpauseThread(OSThreadQueue* queue) {
+    // It was an empty stub, so a game that queued work and unpaused the thread waiting on
+    // it got nothing: the thread stayed runnable=0 forever and the loop blocked right
+    // after it answered the clock. Wake the head of the queue, which is what the SDK does.
+    pc::unpauseCalls++;
+    auto* t = queue ? queue->head : nullptr;
+    if(!t) return;
+    queue->head = nullptr; queue->tail = nullptr;
+    t->queue = nullptr;
+    if(auto* thread=pc::find(t)) thread->runnable=true;
+}
 }
 
 namespace pc {
@@ -242,7 +262,8 @@ void runPortableThreads() {
     profileFrame(30);
     static unsigned probeCount=0;
     if(++probeCount%60==0) {
-        std::cout<<"  scheduler probe: "<<portableCount<<" threads";
+        std::cout<<"  scheduler probe: "<<portableCount<<" threads"
+                 <<" parks="<<pauseQueueCalls<<" unpauses="<<unpauseCalls;
         for(unsigned i=0;i<portableCount;++i) {
             auto& t=portableThreads[i];
             std::cout<<" ["<<i<<"] runnable="<<(t.runnable?1:0)
