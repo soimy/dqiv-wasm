@@ -116,7 +116,12 @@ jobs:
           cd wasm/build
           cp ../index.html .   # build.sh does not copy the page, so serve it by hand
           python3 -m http.server 8111 &
-          google-chrome --headless=new --use-gl=angle --use-angle=swiftshader \
+          # Measured on the runner (run 28, green) and again on this machine: --use-gl=angle
+          # --use-angle=swiftshader does NOT select SwiftShader - Chrome falls back to software
+          # WebGL automatically and says that fallback is deprecated. The flag it asks for is
+          # --enable-unsafe-swiftshader, and with that the run is green and silent. So this
+          # uses the flag, not the fallback, so the job does not break when the fallback goes.
+          google-chrome --headless=new --enable-unsafe-swiftshader \
             --remote-debugging-port=9333 --no-first-run --user-data-dir="$RUNNER_TEMP/hp" &
           for i in $(seq 1 30); do curl -s "http://127.0.0.1:9333/json/version" | grep -q webSocketDebuggerUrl && break; sleep 2; done
           node ../tools/selfcheck-ci.mjs --url http://localhost:8111/index.html --port 9333
