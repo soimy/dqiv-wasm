@@ -456,3 +456,22 @@ gh run view <id> -R soimy/dqiv-wasm --log | grep -oE "warning C[0-9]+" | sort | 
 **新规矩（用户定的）：** 用 headless Chrome 做验证，每轮结束要确认自己起的进程关干净。这轮
 结束时 `/tmp/hp-long` 下剩 0 个进程，用户自己的 Chrome 没动。**坑：`grep -c` 会把 grep 自己
 那行也算进去**（它报 3，实际是 0）——数进程一定要 `grep -v grep`。
+
+## 这一轮（10-19 中午）：卡住的开始动画是在等输入，等的是 A
+
+**用户的设想命中了：它确实在等玩家输入。** 但等的不是 Start。
+
+- **Start（Enter，`Settings.cpp:168` action 6 → `keys[6]=0x0d`）：按下去没反应**，场景计数仍是
+  `Scene 12, frame 272`。
+- **A（`z`，action 0 → bit 0）：按下去场景就动了** —— `Scene 12, frame 272` →
+  **`Scene 3, frame 3336`**。
+- **这两个结论都要靠一条证据才成立：输入确实到了游戏。** 页面里挂了个 `keydown` 监听，两次按键
+  都报 `Enter@CANVAS` / `z@CANVAS`，canvas 已聚焦 → SDL 收得到。所以 Start 的"没反应"是真负
+  结果，不是测量假象。**按键要按住跨几个帧**（游戏读的是"按住"状态，不是事件），down+up 连着发
+  有可能一个回合都看不到。
+
+**新的代价信号，它改变工作方式：** 进了 Scene 3 之后吞吐崩了——前 45 秒 frame callback +1154
+（~25 fps），后 45 秒只 +35（~0.8 fps）；画布探针 +19 → +0。两个读数互相印证：**SwiftShader
+扛不住真实场景。** 所以 headless 只适合跑 selfcheck（没有几何），场景级的开发要用真浏览器。
+
+**下一件事：** 用真浏览器跑，看 Scene 3 是什么（标题画面？），以及 A 之后游戏走到哪一步。
