@@ -334,7 +334,14 @@ void GameWindow::pace() {
     }
     const auto now=SDL_GetTicksNS();
     ProfileScope timing("pace-wait");
-    if(deadline_>now)SDL_DelayPrecise(deadline_-now);
-    else if(now-deadline_>100'000'000)deadline_=now;
+    // Cadence state, asked for because the profiler kept reading pace-wait as 0 while
+    // frames ran fast: the pacing is meant to hold 60, so I want to see which branch
+    // this actually takes rather than guess. Printed once per report window.
+    static unsigned paceCalls=0,paceWaited=0,paceLate=0;
+    ++paceCalls;
+    if(deadline_>now){++paceWaited;SDL_DelayPrecise(deadline_-now);}
+    else if(now-deadline_>100'000'000){++paceLate;deadline_=now;}
+    if(paceCalls%60==0){std::printf("  pace state: ahead %lld ms, waited %u, late-clamps %u, cost %lld us\n",
+        (long long)(std::int64_t(deadline_-now))/1000000,paceWaited,(unsigned)paceLate,(long long)betweenCost_/1000);fflush(stdout);}
 }
 }

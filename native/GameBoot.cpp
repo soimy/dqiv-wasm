@@ -207,8 +207,15 @@ struct GameRun {
 #ifdef __EMSCRIPTEN__
             pc::wasmBoundaryArm();   // the next read is the boundary of the next frame
             // One print a second, so the frame rate stays readable without flooding the journal.
-            static unsigned callbackCount=0;
-            if(++callbackCount%60==0) std::cout<<"  frame callback: swaps "<<geometry.swaps()<<" triangles "<<geometry.triangles().size()<<"\n";
+            static unsigned callbackCount=0;static double windowStart=0.0;
+            if(++callbackCount%60==0){
+                const double now=emscripten_get_now();
+                const double rate=windowStart?(60000.0/(now-windowStart)):0.0;windowStart=now;
+                std::cout<<"  frame callback: swaps "<<geometry.swaps()<<" triangles "<<geometry.triangles().size()
+                         <<" rate "<<int(rate+0.5)<<" steps/s\n";
+                char script[64];std::snprintf(script,sizeof(script),"window.__gameSteps=%d",int(rate+0.5));
+                emscripten_run_script(script);   // so the overlay on the page can show it as well
+            }
 #endif
             if(geometry.swaps()!=renderedSwap) {
                 renderedSwap=geometry.swaps();
@@ -220,6 +227,21 @@ struct GameRun {
                 presenter.frame(video,geometry,state,options,false);
             }
             if(!fastFrame)presenter.present();
+#ifdef __EMSCRIPTEN__
+            // 60 fps cap. Measured as needed, not guessed: the game's own pacing point
+            // is reached only ~36 times a second while this callback runs ~147, so its
+            // 60 fps deadline lags ~40% every second, never gets a chance to wait, and the
+            // DS gets fed frames at 2.4x its cadence. A timing knob would be display
+            // dependent (half the RAF rate is only 60 on a 120 Hz screen), so the cap is
+            // done here, parked at the frame boundary through the machinery the game
+            // already uses to pause.
+            static double frameStart=0.0;
+            if(frameStart){
+                const double used=emscripten_get_now()-frameStart;
+                if(used<16.6667)emscripten_sleep(int(16.6667-used));
+                frameStart=emscripten_get_now();
+            }else frameStart=emscripten_get_now();
+#endif
         });
         // Faster battles (settings): only one game frame in 2, 3 or 4 is
         // shown, paced and heard; the music keeps its tempo.

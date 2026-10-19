@@ -64,7 +64,17 @@ void Assets::add(const std::filesystem::path& root) {
 }
 std::vector<std::uint8_t> Assets::read(const std::string& name) const {
     const auto found = files_.find(assetKey(name));
-    if (found == files_.end()) throw std::runtime_error("Asset missing: " + name);
+    if (found == files_.end()) {
+        // Print each missing name once. The game catches these, so they never reach the
+        // browser console, and I have been guessing about which ones they are. Shared
+        // code, so Windows sees the same line and stays the judge.
+        static std::vector<std::string> missed;
+        if (std::find(missed.begin(),missed.end(),name)==missed.end()) {
+            missed.push_back(name);
+            std::cout << "MISSING ASSET: " << name << '\n' << std::flush;
+        }
+        throw std::runtime_error("Asset missing: " + name);
+    }
     const auto& entry=found->second;
     // From the cache when the source is a packed file, which is the whole point of
     // caching it; the folder path still opens the file itself.

@@ -21,6 +21,8 @@
   #pick{position:absolute;left:0;top:0;padding:6px;background:rgba(0,0,0,.55);
     display:flex;gap:8px;align-items:center}
   #pick.hidden{display:none}
+  #fps{position:absolute;right:0;top:0;padding:6px;background:rgba(0,0,0,.55);
+    pointer-events:none;color:#8f8}
 </style>
 </head>
 <body>
@@ -69,6 +71,14 @@
     const f=e.target.files[0];if(!f)return;romBytes=await f.arrayBuffer();start();
   });
   document.getElementById('norom').addEventListener('click',e=>{e.preventDefault();start();});
+})();
+// Frame-rate overlay, asked for: the eye said it is not 60, so the number goes where
+// both of us can read it. RAF is what the display actually gets; the game's own step
+// rate is pushed here by wasm, which knows what it counts a frame to be.
+(function(){
+  const d=document.createElement('div');d.id='fps';document.body.appendChild(d);
+  let frames=0;const tick=()=>{frames++;requestAnimationFrame(tick);};requestAnimationFrame(tick);
+  setInterval(()=>{const g=window.__gameSteps;d.textContent='RAF '+frames+' Hz | game '+(g!=null?g:'?')+' steps/s';frames=0;},1000);
 })();
 </script>
 </body>

@@ -1,6 +1,8 @@
 #include "main/text/TextAPI.hpp"
 #include "main/dss/DssUtils.hpp"
+#include "main/dss/UnkMessageFind.hpp"
 #include <string.h>
+#include <cstdio>
 
 static GrammarSuffix s_grammar_tbl[59] = {
     { 'b', 0x01000000, { "", "'", "", "" } },
@@ -141,6 +143,37 @@ THUMB int TextExtractor::extract_text(char* dst, int size, int type, int no, int
     }
     if ((type != 0x80000000 || no != 0x32) && type != 0xd0000000 && ((unsigned char*)dst)[0] == 0) {
         ret = 0;
+    }
+    // Probe for FR-1, so one run can settle "table content differs" against "id
+    // numbering differs": print BOTH outcomes, once per unique (type,no), because the
+    // ids that do resolve are what tells me how the numbering is being decided. The
+    // offset for each type is the case above, so I read this offline rather than here.
+    // Shared code, so Windows gets the same print and stays the judge.
+    static struct {int type; int no;} seen[256];
+    static int seen_n=0;
+    int dup=0;
+    for(int i=0;i<seen_n;i++){if(seen[i].type==type&&seen[i].no==no){dup=1;break;}}
+    if(!dup&&seen_n<256){seen[seen_n].type=type;seen[seen_n].no=no;seen_n++;}
+    if(!dup){std::printf("text probe %s %s type=%08x no=%d\n",unkfunc_02055280(type),ret?"ok":"fail",type,no);fflush(stdout);}
+    // Sweep, for BASE only, so the numbering law comes out of the data instead of my guess.
+    // Read-only against my own scratch buffer; capped so the journal stays readable. Shared
+    // code, so Windows sees the same lines and stays the judge.
+    static int ids_swept=0;static int sweeps=0;static char scratch[0x400];static int ranges_done=0;
+    if(type==0x10000000&&!ret&&!dup&&ids_swept<8&&sweeps<48){
+        ids_swept++;
+        // Which block claims this id? Asked through their own range function, so I am not
+        // touching members. This is the print that separates "the id is outside every
+        // block" from "the block that owns it fails the language test".
+        if(!ranges_done){ranges_done=1;std::printf("text ranges: lang=%d\n",TextAPI::m_lang);
+            std::printf("  default claims %d = %d\n",no,g_msg_data_default.unkfunc_02055510((unsigned int)no));
+            for(int k=0;k<11;k++)std::printf("  block %d claims %d = %d\n",k,no,g_msg_data[k].unkfunc_02055510((unsigned int)no));
+            {UnkMessageFile* f=(UnkMessageFile*)g_msg_data_default.m_addr;   // what the archive itself says its numbering is
+             std::printf("  BASE archive: first=%u last=%u count=%u off1=%d off2=%d\n",(unsigned)f->firstId_,(unsigned)f->lastId_,(unsigned)f->count_,f->unk_14,f->unk_18);}
+            fflush(stdout);}
+        const int cands[6]={no-4,no-2,no+2,no+4,no-1000000,no+1000000};
+        for(int k=0;k<6;k++){int c=cands[k];if(c<0)continue;sweeps++;
+            int r=extract_text_msg(scratch,sizeof(scratch),(unsigned int)c,0,0);
+            std::printf("  sweep no=%d cand=%d %s\n",no,c,r?"ok":"fail");fflush(stdout);}
     }
     if (ret == 0) {
         dss::sprintf_s(dst, size, "<ERR %s.%d>", unkfunc_02055280(type), no);

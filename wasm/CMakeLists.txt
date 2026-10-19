@@ -48,6 +48,10 @@ add_link_options(-sUSE_SDL=3)
 # the original ARM code), so the diagnostic is disabled here instead of editing
 # hundreds of decompiler-generated lines. See docs/porting/02-FINDINGS.md.
 add_compile_options(-Wno-c++11-narrowing)
+# Tried, and measured back out: -fexceptions lets a throw reach a catcher across
+# Asyncify frames, but it did NOT stop the trap that motivated it (the stack was
+# byte-identical), so on this target it is pure cost. Kept here as the record.
+#add_compile_options(-fexceptions)
 
 # Ogg Vorbis decoder (public domain) for the smartphone version's music.
 set(DQIV_STB_VORBIS "${CMAKE_BINARY_DIR}/_deps/stb/stb_vorbis.c")
@@ -161,6 +165,9 @@ target_link_libraries(dqiv_wasm_game PRIVATE
 # SharedArrayBuffer, no COOP/COEP headers. The cost is stated, not hidden: Asyncify
 # instruments every function that can pause, so the whole game gets slower, not just
 # this part.
+# Exception catching stays on. -fexceptions was tried on top of it and measured back
+# out: it did not stop the trap that motivated it (the stack came out identical), so on
+# this target it is pure cost. See the note near the compile options.
 target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2
     -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1
     -Wl,--Map=/tmp/dqivmap.txt)
