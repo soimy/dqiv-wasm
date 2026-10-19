@@ -5,6 +5,7 @@
 #include <map>
 #include <stdexcept>
 #include <vector>
+#include <iostream>
 
 namespace pc {
 namespace {
@@ -137,6 +138,14 @@ void extractRom(const std::filesystem::path& path,const std::filesystem::path& f
     if(code!=europeanGameCode)throw std::runtime_error(path.string()+" is not the European Dragon Quest IV (game code "+code+", expected YIVP)");
     Source rom(path);
     const auto files=romFiles(rom);
+    // What the install actually sees, so "which archive holds BASE's messages" stops
+    // being a guess. Windows sees the same line, so it stays the judge.
+    static bool printed=false;
+    if(!printed){printed=true;std::cout<<"install sees "<<files.size()<<" files\n";
+        for(const auto&[name,r]:files){
+            if(name.find("MSG")!=-1||name.find("MES")!=-1||name.find("TXT")!=-1||name.find("WORD")!=-1||name.find("MENU")!=-1)
+                std::cout<<"  TEXTCANDIDATE "<<name<<" size="<<r.size<<"\n";}
+        std::cout<<std::flush;}
     if(!files.contains("data/SOUND/sound_data.sdat"))throw std::runtime_error("The ROM has no game data");
     extract(rom,files,folder);
 }
