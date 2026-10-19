@@ -15,6 +15,7 @@
 #include <emscripten.h>   // emscripten_sleep, which is what makes a parked thread yield
 #include <iostream>
 #include <string>
+#include "Profile.hpp"    // the frame-stage timings, which are on by default here
 #endif
 extern "C" {
 #include <nitro/os/thread.h>
@@ -235,6 +236,10 @@ void runPortableThreads() {
     // anything could read it.
     // Measured, because the game stops right after it enters Scene 3: naming which
     // threads exist and which have work is how we tell a parked thread from a dead loop.
+    // The frame-stage timings. This is the frame boundary, so it is where the averages
+    // get reported. Every 30 frames, not the default 120: the game freezes soon after it
+    // enters a real scene, and at 120 the window rarely closes, so Scene 3 never reports.
+    profileFrame(30);
     static unsigned probeCount=0;
     if(++probeCount%60==0) {
         std::cout<<"  scheduler probe: "<<portableCount<<" threads";

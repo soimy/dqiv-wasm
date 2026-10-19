@@ -10,7 +10,14 @@ struct Total {double microseconds=0;unsigned count=0;};
 std::map<std::string,Total>& totals() {static std::map<std::string,Total> value;return value;}
 unsigned frames=0;
 }
-bool profiling() {static const bool enabled=std::getenv("DQIV_PROFILE")!=nullptr;return enabled;}
+bool profiling() {
+#ifdef __EMSCRIPTEN__
+    // There is no environment to read in the browser, so on wasm the switch has to be in code.
+    return true;
+#else
+    static const bool enabled=std::getenv("DQIV_PROFILE")!=nullptr;return enabled;
+#endif
+}
 void profileAdd(const char* stage,double microseconds,unsigned count) {
     auto& total=totals()[stage];total.microseconds+=microseconds;total.count+=count;
 }
