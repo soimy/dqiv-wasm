@@ -37,13 +37,17 @@ void profileFrame(unsigned every) {
     // the browser has no environment to switch the profiler on in, and asking a
     // player to open DevTools mid-game is how this data stops arriving.
     {
-        const char* want[]={"frame","render-callback","capture+display","display-compose",
-            "display-read","render3D","r3d-prepare","texture-prepare","present","readNative-sync"};
-        char line[512];int used=0;
-        for(const char* stage:want) {
-            const auto found=totals().find(stage);
+        // Short labels: the line has to fit over the game on a narrow page, and a
+        // clipped line reads as "the numbers did not arrive".
+        struct Stage {const char* label;const char* name;};
+        const Stage want[]={{"f","frame"},{"cap","capture+display"},{"dc","display-compose"},
+            {"dr","display-read"},{"r3d","render3D"},{"prep","r3d-prepare"},
+            {"tex","texture-prepare"},{"pres","present"}};
+        char line[256];int used=0;
+        for(const auto& stage:want) {
+            const auto found=totals().find(stage.name);
             const unsigned value=found==totals().end()?0u:unsigned(found->second.microseconds/frames+0.5);
-            used+=std::snprintf(line+used,sizeof(line)-std::size_t(used),"%s%s %u",used?" ":"",stage,value);
+            used+=std::snprintf(line+used,sizeof(line)-std::size_t(used),"%s%s %u",used?" ":"",stage.label,value);
         }
         std::string script="window.__profile='";script+=line;script+="'";
         emscripten_run_script(script.c_str());
