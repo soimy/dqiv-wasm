@@ -114,6 +114,9 @@ GameServices::~GameServices() {
     allocations().clear(); heaps().clear(); data_0211a60c = {}; data_0211a604[0] = data_0211a604[1] = nullptr; mounted = nullptr;
 }
 std::size_t liveGameAllocations() { return allocations().size(); }
+#ifdef __EMSCRIPTEN__
+extern "C" char __heap_base;   // linker symbol: the end of static data and .bss
+#endif
 bool isGameTextPointer(std::uintptr_t value) {
     // The original menu API encodes either a string pointer or a message ID
     // in an integer and recognizes pointers by the DS RAM address range.
@@ -134,10 +137,20 @@ bool isGameTextPointer(std::uintptr_t value) {
     // Only committed bytes in active caller frames can hold a supplied string.
     if(value>=std::max<std::uintptr_t>(low,reinterpret_cast<std::uintptr_t>(&info))&&value<high)return true;
     return info.Type==MEM_IMAGE&&info.AllocationBase==GetModuleHandleW(nullptr);
+#elif defined(__EMSCRIPTEN__)
+    // The allocation map above only covers the game heap, and the module's own data
+    // is not in it: the PC-only menus keep their labels in static arrays (Settings'
+    // s_label/s_value, MaterielMenu_LOAD's s_settingsEntry), so those pointers were
+    // taken for message ids. Measured: s_settingsEntry sits at 0x17bb10 and the start
+    // menu drew "<ERR BASE.1555216>". On wasm32 static data and .bss end exactly at
+    // the linker's heap base and the game heap starts there, while a message id is
+    // never that high, so the heap base separates the two without guessing.
+    const auto heapBase=reinterpret_cast<std::uintptr_t>(&__heap_base);
+    return value>=0x10000&&value<heapBase;
 #else
     // With 4-byte pointers every host pointer is inside an address space the game
     // owns, so the allocation map checked above already covers the pointers the
-    // menu API can hand us (wasm32: the whole linear memory; 32-bit hosts: all of it).
+    // menu API can hand us (32-bit hosts: all of it).
     return false;
 #endif
 }
