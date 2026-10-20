@@ -91,8 +91,18 @@ void GameWindow::applySettings() {
         SDL_SetWindowSize(window_,width,height);
         SDL_SetWindowPosition(window_,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED);
     } else setFullscreen(true);
+#ifdef __EMSCRIPTEN__
+    // eglSwapInterval(0) makes Emscripten drive the main loop with setTimeout
+    // instead of requestAnimationFrame: it prints "Looks like you are rendering
+    // without using requestAnimationFrame for the main loop" and the frame rate
+    // drops (measured in the browser: turning this setting off is what produced
+    // that line). The page's compositor presents on its own clock, so there is
+    // nothing here to turn off - keep RAF whatever the setting says.
+    SDL_GL_SetSwapInterval(1);
+#else
     if(!s.vsync)SDL_GL_SetSwapInterval(0);
     else if(!SDL_GL_SetSwapInterval(-1))SDL_GL_SetSwapInterval(1);
+#endif
     dualScreen().canvasWidth=s.wide?384*16/9.f:256.f;
     stretch_=s.stretch;
     gpu_->settings.autoQuality=s.quality==0;
