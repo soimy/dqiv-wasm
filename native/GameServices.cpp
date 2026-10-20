@@ -93,9 +93,10 @@ const pc::Assets& assets() {
     return *mounted;
 }
 std::vector<std::uint8_t> read(const char* name) {
-    std::cout << "NAME: " << name << '\n' << std::flush;
-    // Print every name the game asks for, not only the ones it fails to get. Windows sees
-    // the same lines, so it stays the judge.
+    // Print every name the game asks for once, not only the ones it fails to get.
+    // Windows sees the same lines, so it stays the judge. There used to be a line per
+    // call as well: it answered the question ("the game does read files by name") and
+    // then cost 7 MB of journal in two minutes, so the unique-name lines carry it now.
     static std::vector<std::string> seen;
     if (std::find(seen.begin(),seen.end(),std::string(name))==seen.end()) {
         seen.push_back(name);
