@@ -168,7 +168,14 @@ THUMB int TextExtractor::extract_text(char* dst, int size, int type, int no, int
             std::printf("  default claims %d = %d\n",no,g_msg_data_default.unkfunc_02055510((unsigned int)no));
             for(int k=0;k<11;k++)std::printf("  block %d claims %d = %d\n",k,no,g_msg_data[k].unkfunc_02055510((unsigned int)no));
             {UnkMessageFile* f=(UnkMessageFile*)g_msg_data_default.m_addr;   // what the archive itself says its numbering is
-             std::printf("  BASE archive: first=%u last=%u count=%u off1=%d off2=%d\n",(unsigned)f->firstId_,(unsigned)f->lastId_,(unsigned)f->count_,f->unk_14,f->unk_18);}
+            std::printf("  buffers: default addr=%p first=%u last=%u count=%u\n",(void*)g_msg_data_default.m_addr,f->firstId_,f->lastId_,f->count_);
+            std::printf("  MEMBERS default base=%d end=%d unk10=%d unk14=%d unk18=%d\n",g_msg_data_default.m_msg_base_id,g_msg_data_default.unk_0c,g_msg_data_default.unk_10,g_msg_data_default.unk_14,g_msg_data_default.unk_18);
+            for(int k=0;k<11;k++){UnkMessageFile* g=(UnkMessageFile*)g_msg_data[k].m_addr;
+                std::printf("  MEMBERS %d base=%d end=%d unk10=%d unk14=%d unk18=%d | cast first=%u last=%u count=%u\n",k,g_msg_data[k].m_msg_base_id,g_msg_data[k].unk_0c,g_msg_data[k].unk_10,g_msg_data[k].unk_14,g_msg_data[k].unk_18,g->firstId_,g->lastId_,g->count_);}
+             std::printf("  BASE archive: first=%u last=%u count=%u off1=%d off2=%d\n",(unsigned)f->firstId_,(unsigned)f->lastId_,(unsigned)f->count_,f->unk_14,f->unk_18);
+                  UnkMessageFile* gf=(UnkMessageFile*)g_msg_file.m_addr;
+                  std::printf("  MSGFILE header first=%u last=%u count=%u off1=%d off2=%d\n",(unsigned)gf->firstId_,(unsigned)gf->lastId_,(unsigned)gf->count_,gf->unk_14,gf->unk_18);
+                  std::printf("  MSGFILE addr=%p size=%d unk80c=%d\n",(void*)g_msg_file.m_addr,g_msg_file.m_size,g_msg_file.unk_80c);}
             fflush(stdout);}
         const int cands[6]={no-4,no-2,no+2,no+4,no-1000000,no+1000000};
         for(int k=0;k<6;k++){int c=cands[k];if(c<0)continue;sweeps++;
