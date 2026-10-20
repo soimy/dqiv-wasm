@@ -3,6 +3,9 @@
 #include <cstdlib>
 #include <map>
 #include <string>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace pc {
 namespace {
@@ -29,6 +32,23 @@ void profileFrame(unsigned every) {
     std::printf("Profile per frame:");
     for(const auto& [stage,total]:totals())std::printf(" %s %.0fus/%u",stage.c_str(),total.microseconds/frames,total.count/frames);
     std::printf("\n");std::fflush(stdout);
+#ifdef __EMSCRIPTEN__
+    // The same stages on the page, so the numbers can be read without the console:
+    // the browser has no environment to switch the profiler on in, and asking a
+    // player to open DevTools mid-game is how this data stops arriving.
+    {
+        const char* want[]={"frame","render-callback","capture+display","display-compose",
+            "display-read","render3D","r3d-prepare","texture-prepare","present","readNative-sync"};
+        char line[512];int used=0;
+        for(const char* stage:want) {
+            const auto found=totals().find(stage);
+            const unsigned value=found==totals().end()?0u:unsigned(found->second.microseconds/frames+0.5);
+            used+=std::snprintf(line+used,sizeof(line)-std::size_t(used),"%s%s %u",used?" ":"",stage,value);
+        }
+        std::string script="window.__profile='";script+=line;script+="'";
+        emscripten_run_script(script.c_str());
+    }
+#endif
     totals().clear();frames=0;
 }
 }

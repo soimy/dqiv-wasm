@@ -78,7 +78,28 @@
 (function(){
   const d=document.createElement('div');d.id='fps';document.body.appendChild(d);
   let frames=0;const tick=()=>{frames++;requestAnimationFrame(tick);};requestAnimationFrame(tick);
-  setInterval(()=>{const g=window.__gameSteps;d.textContent='RAF '+frames+' Hz | game '+(g!=null?g:'?')+' steps/s';frames=0;},1000);
+  setInterval(()=>{
+    const g=window.__gameSteps;
+    d.textContent='RAF '+frames+' Hz | game '+(g!=null?g:'?')+' steps/s'+
+      (window.__profile?'\n'+window.__profile:'');
+    frames=0;
+  },1000);
+})();
+// F10 saves the journal the game wrote, so the numbers behind a bad frame rate can
+// be read here instead of in DevTools. The file lives in the page's memory (MEMFS),
+// so this is the only way out of the browser without opening the console.
+(function(){
+  addEventListener('keydown',e=>{
+    if(e.key!=='F10')return;
+    e.preventDefault();
+    try{
+      const bytes=FS.readFile('/saves/journal.txt');
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([bytes],{type:'text/plain'}));
+      a.download='journal.txt';a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+    }catch(err){console.error('journal not available: '+err);}
+  },true);
 })();
 </script>
 </body>
