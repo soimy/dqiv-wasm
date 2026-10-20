@@ -25,6 +25,7 @@ public:
     void canvasPixels(const GpuLayout&,float& width,float& height) const;
     void present(const GpuLayout&,std::span<const std::uint32_t> recipes);
     void audio(std::span<const std::int16_t> samples);
+    int audioQueued() const;   // frames already queued for the device, -1 without one
     void pace();
     // Frame rates above 60: the presenter draws frames between the game's
     // (`alpha` of the way from the previous one), until the next one is due.

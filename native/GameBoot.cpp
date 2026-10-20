@@ -48,10 +48,12 @@ extern "C" {
 }
 #include "main/global/UnkGameApplication.hpp"
 #include "main/global/GlobalDQ4.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <exception>
 #include <iostream>
+#include <vector>
 #ifndef __EMSCRIPTEN__
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -182,7 +184,7 @@ struct GameRun {
 #endif
     pc::FramePresenter presenter{window,display,textures};
     OSThreadQueue frameQueue{};
-    std::array<std::int16_t,1600> samples{};
+    std::vector<std::int16_t> audio{};   // filled to the device's lead, not per frame
     unsigned renderedSwap=0;
     bool fastFrame=false;
     unsigned boostFrames=0;
@@ -250,15 +252,41 @@ struct GameRun {
             const bool shown=!fastFrame;
             const int boost=data_0210bb94.unkfunc_0205810c()==13?pc::gameSettings().battleBoost+1:1;
             fastFrame=boost>1&&++boostFrames%unsigned(boost)!=0;
-            if(shown) {
-                pc::ProfileScope timing("sound");
-                sound.render(samples);mobileSound.mix(samples);
-            }
+            pumpAudio();
             power.advanceFrame();pc::advanceWireless();
-            if(shown) {window.audio(samples);window.pace();}
+            if(shown) window.pace();
             OS_UnpauseThread(&frameQueue);
         });
         pc::setWaitCallback([this] {OS_PauseThread(&frameQueue);threads.checkErrors();});
+    }
+    // The sound card takes 48000 frames a second whether or not the game reaches 60.
+    // Writing one 60 Hz frame's worth (800 frames) per game frame made production
+    // follow the frame rate: measured 24-31k frames/s at 28-40 fps, and the device
+    // queue ran down to 6 frames ("starved 30/60"). So top the queue up to a fixed
+    // lead instead, and the lead is what absorbs a slow frame. It runs at the frame
+    // boundary and again at the end of the frame, because the boundary alone ran only
+    // 13-21 times a second (measured) while frames came 25-40 times.
+    void pumpAudio() {
+        if(fastFrame)return;   // the battle boost skips sound on purpose
+        pc::ProfileScope timing("sound");
+#ifdef __EMSCRIPTEN__
+        // The sound card takes 48000 frames a second whether or not the game reaches
+        // 60. Writing one 60 Hz frame's worth (800 frames) per game frame made the
+        // production follow the frame rate: measured 24-31k frames/s at 28-40 fps and
+        // "starved 30/60, min 6" on the device queue - that is the crackle. So top the
+        // queue up to a fixed lead instead; the lead is what absorbs a slow frame.
+        constexpr int leadFrames=2880;   // 60 ms at 48 kHz
+        const int queued=window.audioQueued();
+        const int frames=queued<0?0:std::clamp(leadFrames-queued,0,19200);
+#else
+        // The desktop loop paces itself to 60, so one frame is exactly the right
+        // amount and the queue stays where it has always been.
+        const int frames=800;
+#endif
+        if(!frames)return;
+        audio.resize(std::size_t(frames)*2);
+        sound.render(audio);mobileSound.mix(audio);
+        window.audio(audio);
     }
     void step() {
         // The journal keeps the scene changes (battle, town, field...).
@@ -269,6 +297,9 @@ struct GameRun {
             pc::ProfileScope stepTiming("frame");
             if(!data_0210bb94.nativeStep()) {running=false;return;}
         }
+#ifdef __EMSCRIPTEN__
+        pumpAudio();   // the frame's own sound commands are in, so top the device up
+#endif
         pc::profileFrame();
         geometry.clearTriangles();
         ++frame;

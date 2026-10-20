@@ -286,6 +286,7 @@ void GameWindow::present(const GpuLayout& layout,std::span<const std::uint32_t> 
     ProfileScope timing("present-swap");
     require(SDL_GL_SwapWindow(window_));
 }
+int GameWindow::audioQueued() const {return audio_?int(audio_->queuedFrames()):-1;}
 void GameWindow::audio(std::span<const std::int16_t> samples) {
     if(!audio_)return;
     const int volume=settingsUsed_?gameSettings().volume:100;
