@@ -3,6 +3,7 @@
 #include "Archive.hpp"
 #include "main/data/FileLoader.hpp"
 #include <algorithm>
+#include <iostream>
 #include <cstring>
 #include <climits>
 #include <deque>
@@ -10,6 +11,9 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/stack.h>   // the stack's bounds, which are not the heap's
+#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -89,7 +93,25 @@ const pc::Assets& assets() {
     return *mounted;
 }
 std::vector<std::uint8_t> read(const char* name) {
-    if (!assets().contains(name)) return {};
+    std::cout << "NAME: " << name << '\n' << std::flush;
+    // Print every name the game asks for, not only the ones it fails to get. Windows sees
+    // the same lines, so it stays the judge.
+    static std::vector<std::string> seen;
+    if (std::find(seen.begin(),seen.end(),std::string(name))==seen.end()) {
+        seen.push_back(name);
+        std::cout << "ASKED: " << name << '\n' << std::flush;
+    }
+    if (!assets().contains(name)) {
+        // A missing name used to come back empty in silence, so "nothing is missing" was
+        // not evidence of completeness. Each unique name prints once; Windows sees the
+        // same line, so it stays the judge.
+        static std::vector<std::string> asked;
+        if (std::find(asked.begin(),asked.end(),std::string(name))==asked.end()) {
+            asked.push_back(name);
+            std::cout << "MISSING: " << name << '\n' << std::flush;
+        }
+        return {};
+    }
     auto data = assets().read(name);
     if (data.size() > INT_MAX) throw std::runtime_error("Asset too large for game API");
     return data;
@@ -146,7 +168,11 @@ bool isGameTextPointer(std::uintptr_t value) {
     // the linker's heap base and the game heap starts there, while a message id is
     // never that high, so the heap base separates the two without guessing.
     const auto heapBase=reinterpret_cast<std::uintptr_t>(&__heap_base);
-    return value>=0x10000&&value<heapBase;
+    if(value>=0x10000&&value<heapBase)return true;
+    // The stack is a region of its own, and the API is handed stack buffers too:
+    // unkfunc_02050c70 formats a number into a local buffer and draws that buffer.
+    // Measured: 0xf500, the slot numbers, drew "<ERR BASE.62720>" before this.
+    return value>=emscripten_stack_get_end()&&value<emscripten_stack_get_base();
 #else
     // With 4-byte pointers every host pointer is inside an address space the game
     // owns, so the allocation map checked above already covers the pointers the
