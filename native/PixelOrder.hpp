@@ -23,9 +23,18 @@ constexpr unsigned kShiftR=16,kShiftG=8,kShiftB=0;   // a readback gives 0xAARRG
 inline const std::uint32_t* uploadOrder(std::span<const std::uint32_t> pixels,std::vector<std::uint32_t>& scratch) {
 #ifdef __EMSCRIPTEN__
     if(pixels.empty())return pixels.data();
-    scratch.assign(pixels.begin(),pixels.end());
-    for(auto& p:scratch) {const unsigned a=p>>24,r=(p>>16)&255,g=(p>>8)&255,b=p&255;p=(a<<24)|(b<<16)|(g<<8)|r;}
-    return scratch.data();
+    // This runs on 4 recipe planes of 256x704 every frame (2.9 MB), so it is fused
+    // (no copy-then-rewrite) and swaps R and B with masks instead of four extracts:
+    // 0xAARRGGBB -> 0xAABBGGRR. The buffer is kept across calls and written whole,
+    // because resize would zero-fill 2.9 MB that is about to be overwritten.
+    static thread_local std::vector<std::uint32_t> swizzled;
+    (void)scratch;
+    if(swizzled.size()<pixels.size())swizzled.resize(pixels.size());
+    for(std::size_t i=0;i<pixels.size();++i) {
+        const std::uint32_t p=pixels[i];
+        swizzled[i]=(p&0xFF00FF00u)|((p&0xFFu)<<16)|((p>>16)&0xFFu);
+    }
+    return swizzled.data();
 #else
     (void)scratch;return pixels.data();
 #endif
