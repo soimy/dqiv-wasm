@@ -741,6 +741,12 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
     }
     DQIV_TRACE("after prepareTextures");
     std::vector<Prepared> polygons;
+    {   // Reserve once: a town frame is ~3,500 triangles, and growing the vector from
+        // zero reallocated and copied it a dozen times every frame.
+        std::size_t triangles=0;
+        for(const auto& batch:batches)triangles+=batch.triangles.size();
+        polygons.reserve(triangles);
+    }
     std::optional<ProfileScope> stage(std::in_place,"r3d-prepare");
     std::uint32_t cachedViewport=0;const GpuMatrix* cachedTarget=nullptr;GpuMatrix cachedMatrix{};
     std::uint64_t cachedTexture=~0ull;unsigned cachedName=0;float cachedSize[2]={1,1};
@@ -1081,7 +1087,8 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     gl::Uniform2f(uniform(reduceProgram_,"uScale"),source[2]*fogged.width/256.f,source[3]*fogged.height/192.f);
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     DQIV_TRACE("readNative draw");
-    std::vector<std::uint32_t> raw(256*192);
+    // Kept across calls: 196 KB allocated and freed every frame, and this runs twice.
+    static thread_local std::vector<std::uint32_t> raw(256*192);
     gl::PixelStorei(GL_PACK_ALIGNMENT,4);
     key&=1;
     if(immediate||!readPending_[key]) gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,raw.data());
@@ -1108,10 +1115,19 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
         gl::BindBuffer(GL_PIXEL_PACK_BUFFER,0);
         readPending_[key]=true;
     }
-    pixels.resize(raw.size());
+    // Un-premultiply through a reciprocal table. The division form did three integer
+    // divisions per pixel - 147,456 a frame, and integer division is one of the slower
+    // wasm instructions; the stage measured 2.2 ms on the machine that ran the town at
+    // 28 fps. Rounding is the same to within one count.
+    static const struct Reciprocal {
+        unsigned value[256];
+        Reciprocal() {value[0]=0;for(unsigned a=1;a<256;++a)value[a]=(255u*65536u+a/2)/a;}
+    } reciprocal;
+    pixels.resize(256*192);
     for(unsigned y=0;y<192;++y)for(unsigned x=0;x<256;++x) {
         const auto p=raw[(191-y)*256+x],a=p>>24;
-        auto channel=[&](unsigned shift){return a?std::min(255u,(((p>>shift)&255)*255+a/2)/a):0u;};
+        const unsigned r=reciprocal.value[a];
+        auto channel=[&](unsigned shift){return std::min(255u,((((p>>shift)&255)*r)+32768u)>>16);};
         pixels[y*256+x]=(a<<24)|(channel(kShiftR)<<16)|(channel(kShiftG)<<8)|channel(kShiftB);
     }
 }
