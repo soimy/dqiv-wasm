@@ -56,6 +56,18 @@
     if(r&&r.stack)show('error',r.stack);
   });
   show('log','serving over http, canvas id="canvas" (SDL\'s default selector).');
+  // WebGL masks GL_RENDERER ("WebKit WebGL"), so whether the browser is on the GPU at
+  // all is invisible from the game's own log. It decides what a frame time means: a
+  // software fallback moves the 3D work onto the CPU and no amount of triangle
+  // book-keeping explains the frame rate. The display rate matters the same way.
+  (function(){
+    try{
+      const probe=document.createElement('canvas').getContext('webgl2');
+      const info=probe&&probe.getExtension('WEBGL_debug_renderer_info');
+      show('log','GPU: '+(info?probe.getParameter(info.UNMASKED_RENDERER_WEBGL):'(no WEBGL_debug_renderer_info)'));
+      show('log','display: '+screen.width+'x'+screen.height+' css px, devicePixelRatio '+devicePixelRatio);
+    }catch(e){show('log','GPU probe failed: '+e);}
+  })();
 
   // The ROM has to be in the virtual filesystem before main() runs, so the page
   // owns the start: read the file, then load the script with a preRun that writes
