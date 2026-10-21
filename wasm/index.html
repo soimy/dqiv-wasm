@@ -42,7 +42,14 @@
 (function(){
   const log=document.getElementById('log');
   const flat=x=>{try{return typeof x==='object'?JSON.stringify(x):String(x)}catch(e){return String(x)}};
-  const show=(level,s)=>{log.textContent+=(level==='log'?'':level.toUpperCase()+' ')+s+'\n';log.scrollTop=log.scrollHeight;};
+  // The game writes through std::cout, which lands in this node, and a session's worth
+  // of that is megabytes of text: every append re-lays out the whole thing. Kept to the
+  // last few thousand characters, which is all anyone reads from here.
+  const show=(level,s)=>{
+    log.textContent+=(level==='log'?'':level.toUpperCase()+' ')+s+'\n';
+    if(log.textContent.length>20000)log.textContent=log.textContent.slice(-12000);
+    log.scrollTop=log.scrollHeight;
+  };
   for(const level of ['log','info','warn','error']){
     const orig=console[level];
     console[level]=function(...a){show(level,a.map(flat).join(' '));return orig.apply(console,a);};
