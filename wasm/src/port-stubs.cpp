@@ -58,6 +58,12 @@ void SaveStore::write(std::uint32_t offset, std::span<const std::uint8_t> source
     // TODO(port): publish atomically, as the Windows implementation does.
     std::ofstream out(path_, std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(bytes_.data()), static_cast<std::streamsize>(bytes_.size()));
+    out.close();
+    // Push the directory to IndexedDB, or the save dies with the tab. The page
+    // debounces it: the game rewrites the whole file on every write().
+#ifdef __EMSCRIPTEN__
+    emscripten_run_script("window.__syncSaves&&window.__syncSaves()");
+#endif
 }
 }
 

@@ -168,6 +168,10 @@ target_link_libraries(dqiv_wasm_game PRIVATE
 # Exception catching stays on. -fexceptions was tried on top of it and measured back
 # out: it did not stop the trap that motivated it (the stack came out identical), so on
 # this target it is pure cost. See the note near the compile options.
-target_link_options(dqiv_wasm_game PRIVATE -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2
+# IDBFS: the save directory is mirrored into IndexedDB (wasm/index.html mounts it).
+# Emscripten 4 no longer links it in by default - without this the mount throws
+# "IDBFS is no longer included by default".
+target_link_options(dqiv_wasm_game PRIVATE -lidbfs.js
+    -sDISABLE_EXCEPTION_CATCHING=0 -sMAX_WEBGL_VERSION=2
     -sINITIAL_MEMORY=64MB -sALLOW_MEMORY_GROWTH=1 -sASYNCIFY=1
     -Wl,--Map=/tmp/dqivmap.txt)

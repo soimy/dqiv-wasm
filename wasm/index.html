@@ -79,13 +79,43 @@
   // The ROM has to be in the virtual filesystem before main() runs, so the page
   // owns the start: read the file, then load the script with a preRun that writes
   // it. preRun callbacks run before main, which is exactly the guarantee needed.
-  // MEMFS does not survive a reload, so this is a per-visit pick - stated rather
-  // than papered over with an IDBFS, which would need COOP/COEP headers we decided
-  // against (single-threaded cooperative scheduling, no SharedArrayBuffer).
+  // The ROM itself is still a per-visit pick (MEMFS); the saves are not.
   let romBytes=null;
+
+  // Saves outlive the tab. Emscripten's IDBFS keeps a directory in IndexedDB: writes
+  // stay in memory, FS.syncfs pushes them to storage, and the load at startup is
+  // asynchronous - so the game waits for the callback before it reads anything (it
+  // sleeps in main until dqiv_savesReady arrives). No COOP/COEP is involved: that
+  // requirement belongs to SharedArrayBuffer, which this single-threaded build does
+  // not use.
+  let syncTimer=0;
+  window.__syncSaves=function(){
+    clearTimeout(syncTimer);
+    syncTimer=setTimeout(function(){
+      FS.syncfs(false,function(err){if(err)show('err','save not stored: '+err);});
+    },250);
+  };
+  addEventListener('pagehide',function(){FS.syncfs(false,function(){});});
+
   const start=()=>{
     document.getElementById('pick').classList.add('hidden');
-    window.Module={preRun:[function(){ if(romBytes) FS.writeFile('/pack',new Uint8Array(romBytes)); }]};
+    window.Module={preRun:[function(){
+      if(romBytes) FS.writeFile('/pack',new Uint8Array(romBytes));
+      // A failure here must not take the game with it: without the mount the run
+      // still works, it just cannot keep anything.
+      try{
+        try{FS.mkdir('/saves');}catch(e){if(e.errno!==20)throw e;}
+        FS.mount(IDBFS,{},'/saves');
+        FS.syncfs(true,function(err){
+          if(err)show('err','saves could not be read: '+err);
+          else show('log','saves: read from IndexedDB');
+          window.Module._dqiv_savesReady();
+        });
+      }catch(e){
+        show('err','saves will not be kept: '+e);
+        window.Module._dqiv_savesReady();
+      }
+    }]};
     const s=document.createElement('script');s.src='dqiv_wasm_game.js';document.body.appendChild(s);
   };
   document.getElementById('rom').addEventListener('change',async e=>{
@@ -131,7 +161,7 @@
     if(e.key!=='F10')return;
     e.preventDefault();
     try{
-      const bytes=FS.readFile('/saves/journal.txt');
+      const bytes=FS.readFile('/tmp/journal.txt');
       const a=document.createElement('a');
       a.href=URL.createObjectURL(new Blob([bytes],{type:'text/plain'}));
       a.download='journal.txt';a.click();

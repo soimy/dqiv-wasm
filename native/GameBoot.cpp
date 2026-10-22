@@ -83,7 +83,16 @@ extern NitroOverlays earlyOverlays;
 
 namespace {
 // The game has no console: its output goes to a journal beside the save.
-std::string journalPath() {return (pc::saveDirectory()/"journal.txt").string();}
+std::string journalPath() {
+#ifdef __EMSCRIPTEN__
+    // Kept out of the save directory on purpose: that directory is the one mirrored
+    // into IndexedDB, and the journal is megabytes of text written every frame. A
+    // flush would carry it along on every save.
+    return "/tmp/journal.txt";
+#else
+    return (pc::saveDirectory()/"journal.txt").string();
+#endif
+}
 // The first start of this version brings the save and the settings of an
 // earlier one (kept in %LOCALAPPDATA%) into the saves folder.
 void adoptPreviousSave() {
@@ -346,6 +355,8 @@ struct GameRun {
 };
 GameRun* gameRun=nullptr;   // the wasm loop callback needs a handle to it
 #ifdef __EMSCRIPTEN__
+bool savesReady=false;      // set by the page once IndexedDB has been read
+extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_savesReady() {savesReady=true;}
 // Only the browser build has a page to call this from; EMSCRIPTEN_KEEPALIVE does not
 // exist for MSVC, which is what CI builds on the other side.
 extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
@@ -361,6 +372,17 @@ extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
 }
 
 int main() {
+#ifdef __EMSCRIPTEN__
+    // The save directory is an IndexedDB mount (see wasm/index.html), and its load is
+    // asynchronous. The game reads the save as soon as the player continues, so wait
+    // for the page to say the load finished rather than race it. The timeout is there
+    // so a browser without IndexedDB still starts, with the in-memory directory.
+    {
+        const double deadline=emscripten_get_now()+3000.0;
+        while(!savesReady&&emscripten_get_now()<deadline)emscripten_sleep(4);
+        if(!savesReady)std::cout<<"saves: IndexedDB did not load; this session will not be kept\n";
+    }
+#endif
     {
         std::filesystem::create_directories(pc::saveDirectory());
         adoptPreviousSave();
