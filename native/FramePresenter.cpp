@@ -57,6 +57,11 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     const bool mainTop=(*static_cast<unsigned short*>(video.reg(0x04000304,2))&0x8000)!=0;
     const unsigned control=*static_cast<unsigned*>(video.reg(0x04000000,4));
     const bool capturing=(*static_cast<unsigned*>(video.reg(0x04000064,4))&0x80000000u)!=0;
+#ifdef __EMSCRIPTEN__
+    // Before this frame's scene is queued, take the picture the previous frame left in
+    // the readback target: by now its draw has finished, so the read does not wait.
+    if(!native3d&&capturing) window_.gpu().takeNative(native3d_);
+#endif
     // Joined: one scene through both screens (DualScreen.hpp). Field: the world
     // map over the whole canvas, the top screen's map as an inset. Battle: the
     // battle scene continued over the top screen. Split: the DS two-screen 3D

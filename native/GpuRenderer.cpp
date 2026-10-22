@@ -1079,17 +1079,25 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
     gl::ActiveTexture(GL_TEXTURE0);
     gpuCheckpoint("gpu-fog");
 }
-void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,const std::array<float,4>& source,unsigned key) {
-#ifdef __EMSCRIPTEN__
-    // WebGL2 gives no way to read a mapped buffer, so the async readback below has
-    // no read side here and every read is a direct one. That is a real cost - the
-    // pipelining between this frame's draw and the previous frame's readback is
-    // what the two-buffer scheme buys on desktop, and it is gone here - stated
-    // rather than hidden.
-    immediate=true;
-#endif
-    if(diag::skipReadback)return;
-    ProfileScope timing(immediate?"readNative-sync":"readNative");
+namespace {
+// Un-premultiply through a reciprocal table. The division form did three integer
+// divisions per pixel - 147,456 a frame, and integer division is one of the slower
+// wasm instructions. Rounding is the same to within one count.
+void unpremultiplyNative(const std::vector<std::uint32_t>& raw,std::vector<std::uint32_t>& pixels) {
+    static const struct Reciprocal {
+        unsigned value[256];
+        Reciprocal() {value[0]=0;for(unsigned a=1;a<256;++a)value[a]=(255u*65536u+a/2)/a;}
+    } reciprocal;
+    pixels.resize(256*192);
+    for(unsigned y=0;y<192;++y)for(unsigned x=0;x<256;++x) {
+        const auto p=raw[(191-y)*256+x],a=p>>24;
+        const unsigned r=reciprocal.value[a];
+        auto channel=[&](unsigned shift){return std::min(255u,((((p>>shift)&255)*r)+32768u)>>16);};
+        pixels[y*256+x]=(a<<24)|(channel(kShiftR)<<16)|(channel(kShiftG)<<8)|channel(kShiftB);
+    }
+}
+}
+void GpuRenderer::queueNative(const std::array<float,4>& source) {
     resize(native_,256,192,false,false);
     gl::BindFramebuffer(GL_FRAMEBUFFER,native_.framebuffer);gl::Viewport(0,0,256,192);
     DQIV_TRACE("readNative bind");
@@ -1102,7 +1110,34 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     gl::Uniform2f(uniform(reduceProgram_,"uScale"),source[2]*fogged.width/256.f,source[3]*fogged.height/192.f);
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     DQIV_TRACE("readNative draw");
-    // Kept across calls: 196 KB allocated and freed every frame, and this runs twice.
+    nativeDrawn_=true;   // the next frame takes it, before queuing its own scene
+}
+void GpuRenderer::takeNative(std::vector<std::uint32_t>& pixels) {
+    if(diag::skipReadback)return;
+    ProfileScope timing("readNative");
+    static thread_local std::vector<std::uint32_t> raw(256*192);
+    if(!nativeDrawn_) {pixels.assign(256*192,0);return;}
+    resize(native_,256,192,false,false);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,native_.framebuffer);
+    gl::PixelStorei(GL_PACK_ALIGNMENT,4);
+    gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,raw.data());
+    DQIV_TRACE("readNative readpixels");
+    nativeDrawn_=false;
+    unpremultiplyNative(raw,pixels);
+}
+void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,const std::array<float,4>& source,unsigned key) {
+    if(diag::skipReadback)return;
+#ifdef __EMSCRIPTEN__
+    // WebGL2 has no mapped-buffer read here (glGetBufferSubData is not in Emscripten's
+    // GL library and MAP_READ is refused), so the desktop pipelining cannot be used as
+    // written. The display path takes the picture one frame late instead - at the top
+    // of the next frame, before that frame's scene is queued (takeNative) - because
+    // reading it after the scene made glReadPixels wait for the scene. Measured with
+    // the readback switched off: the same town ran 36 -> 47 fps.
+    if(!immediate) {queueNative(source);return;}
+#endif
+    ProfileScope timing(immediate?"readNative-sync":"readNative");
+    queueNative(source);
     static thread_local std::vector<std::uint32_t> raw(256*192);
     gl::PixelStorei(GL_PACK_ALIGNMENT,4);
     key&=1;
@@ -1130,21 +1165,7 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
         gl::BindBuffer(GL_PIXEL_PACK_BUFFER,0);
         readPending_[key]=true;
     }
-    // Un-premultiply through a reciprocal table. The division form did three integer
-    // divisions per pixel - 147,456 a frame, and integer division is one of the slower
-    // wasm instructions; the stage measured 2.2 ms on the machine that ran the town at
-    // 28 fps. Rounding is the same to within one count.
-    static const struct Reciprocal {
-        unsigned value[256];
-        Reciprocal() {value[0]=0;for(unsigned a=1;a<256;++a)value[a]=(255u*65536u+a/2)/a;}
-    } reciprocal;
-    pixels.resize(256*192);
-    for(unsigned y=0;y<192;++y)for(unsigned x=0;x<256;++x) {
-        const auto p=raw[(191-y)*256+x],a=p>>24;
-        const unsigned r=reciprocal.value[a];
-        auto channel=[&](unsigned shift){return std::min(255u,((((p>>shift)&255)*r)+32768u)>>16);};
-        pixels[y*256+x]=(a<<24)|(channel(kShiftR)<<16)|(channel(kShiftG)<<8)|channel(kShiftB);
-    }
+    unpremultiplyNative(raw,pixels);
 }
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
     constexpr std::size_t plane=std::size_t(256)*GpuLayout::recipeRows;

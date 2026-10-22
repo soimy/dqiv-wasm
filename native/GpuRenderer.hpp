@@ -101,6 +101,8 @@ public:
     // read completes in the background instead of stalling the GPU.
     // `source`: the part of the target to read (x, y, width, height as fractions, y from the top).
     // `key` separates alternating screens, each getting its own previous frame.
+    void queueNative(const std::array<float,4>& source);   // reduce this frame's 3D screen into native_
+    void takeNative(std::vector<std::uint32_t>& pixels);   // read the previous frame's, before this frame's scene
     void readNative(std::vector<std::uint32_t>& pixels,bool immediate=false,const std::array<float,4>& source={0,0,1,1},unsigned key=0);
     // Recipes: Display::recipes() layout (3 planes of 256 x 384).
     void present(const GpuLayout&,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch);
@@ -144,6 +146,7 @@ private:
     Target scene_[2],native_,output_,fogged_[2],world_;
     unsigned lastSlot_=0,readBuffers_[2]{};
     bool readPending_[2]{},fogApplied_[2]{};
+    bool nativeDrawn_=false;   // the 3D screen is in native_ and can be read a frame later
     unsigned frameQueries_[4]{};
 #ifndef __EMSCRIPTEN__
     unsigned queryHead_=0,queriesPending_=0; // the GPU-time query ring, desktop only
