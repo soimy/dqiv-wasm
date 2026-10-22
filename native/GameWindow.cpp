@@ -337,8 +337,14 @@ void GameWindow::pace() {
             shown=true;next=now+step;
         }
         if(!shown) {
+            // Nothing fitted between the two game frames. The fallback used to draw one
+            // anyway, at the end position - which the next game frame then drew again.
+            // On a machine that cannot hold the game's own rate that is a whole extra
+            // render every frame: raising the target above 60 measured r3d-prepare
+            // 1.98 -> 3.99 ms, frame 13.5 -> 21.6 ms, and the rate halved. Draw it only
+            // when there is room for it.
             const auto now=SDL_GetTicksNS();
-            if(interpolator_(1.f))measureBetween(SDL_GetTicksNS()-now);
+            if(now+betweenCost_<deadline_&&interpolator_(1.f))measureBetween(SDL_GetTicksNS()-now);
             // An estimate made by a slow frame (a map loading) comes back down.
             betweenCost_=betweenCost_*3/4;
         }
