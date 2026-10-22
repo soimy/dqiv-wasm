@@ -32,8 +32,9 @@
 <div id="log"></div>
 <div id="pick">
   <input type="file" id="rom" accept=".nds,*">
-  <span>pick the pack your machine built (or your own ROM) - the game reads it in place.
-    Or <a href="#" id="norom">start without one</a> and it runs with an empty pack.</span>
+  <span id="romstate">pick the pack your machine built (or your own ROM) - the game reads it in place.
+    Or <a href="#" id="norom">start without one</a> and it runs with an empty pack.
+    The file is remembered after this, so the next visit starts straight away.</span>
 </div>
 <script>
 // Mirror stdout, stderr and the console onto the page. The game reports its
@@ -97,6 +98,28 @@
   };
   addEventListener('pagehide',function(){FS.syncfs(false,function(){});});
 
+  // The ROM is 128 MB, and choosing it out of a file dialog on every reload is the
+  // difference between a game and a build tool. Kept in IndexedDB as a Blob (the
+  // structured clone of a Blob does not copy the bytes the way an ArrayBuffer does).
+  // index.html?pick=1 skips the remembered one, for a ROM that does not boot.
+  const ROM_DB='dqiv-rom',ROM_STORE='rom',ROM_KEY='pack';
+  const romDb=()=>new Promise((res,rej)=>{
+    const r=indexedDB.open(ROM_DB,1);
+    r.onupgradeneeded=()=>r.result.createObjectStore(ROM_STORE);
+    r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);
+  });
+  const romGet=async()=>{const db=await romDb();return new Promise((res,rej)=>{
+    const t=db.transaction(ROM_STORE,'readonly').objectStore(ROM_STORE).get(ROM_KEY);
+    t.onsuccess=()=>res(t.result||null);t.onerror=()=>rej(t.error);});};
+  const romPut=async blob=>{const db=await romDb();return new Promise((res,rej)=>{
+    const tx=db.transaction(ROM_STORE,'readwrite');tx.objectStore(ROM_STORE).put(blob,ROM_KEY);
+    tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);});};
+  const romState=document.getElementById('romstate');
+  const showPicker=text=>{
+    document.getElementById('pick').classList.remove('hidden');
+    romState.textContent=text;
+  };
+
   const start=()=>{
     document.getElementById('pick').classList.add('hidden');
     window.Module={preRun:[function(){
@@ -119,9 +142,28 @@
     const s=document.createElement('script');s.src='dqiv_wasm_game.js';document.body.appendChild(s);
   };
   document.getElementById('rom').addEventListener('change',async e=>{
-    const f=e.target.files[0];if(!f)return;romBytes=await f.arrayBuffer();start();
+    const f=e.target.files[0];if(!f)return;
+    try{await romPut(f);show('log','ROM remembered ('+Math.round(f.size/1048576)+' MB) - next visit starts without this dialog');}
+    catch(err){show('err','ROM not remembered: '+err);}
+    romBytes=await f.arrayBuffer();start();
   });
   document.getElementById('norom').addEventListener('click',e=>{e.preventDefault();start();});
+
+  (async function(){
+    if(location.search.includes('pick'))return;
+    let blob=null;
+    try{blob=await romGet();}catch(e){show('log','ROM memory unavailable: '+e);}
+    if(!blob)return;
+    if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
+    romState.textContent='remembered ROM ('+Math.round(blob.size/1048576)+' MB) - starting';
+    try{romBytes=await blob.arrayBuffer();}catch(e){showPicker('the stored ROM could not be read: '+e);return;}
+    start();
+    // A remembered ROM that never gets the game to its first frames is almost
+    // certainly not this game's: hand the picker back instead of trapping the page.
+    setTimeout(function(){
+      if(!window.__gameSteps)showPicker('that ROM did not start the game - pick another one (it replaces the stored copy).');
+    },45000);
+  })();
 })();
 // Frame-rate overlay, asked for: the eye said it is not 60, so the number goes where
 // both of us can read it. RAF is what the display actually gets; the game's own step
