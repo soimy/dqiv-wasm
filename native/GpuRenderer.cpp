@@ -440,7 +440,10 @@ std::vector<std::uint32_t> texturePixels(const Texture& texture,int scale,int& w
 }
 struct GpuVertex {float position[4],color[4],texture[4];std::uint32_t params[4];float clip[4],rect[4];};
 struct Prepared {
-    std::array<GpuVertex,3> vertices;
+    // The three vertices live in a separate array, indexed by `first`: a town frame
+    // is ~3,500 of these, and carrying 288 bytes of vertex data in each one meant a
+    // megabyte copied through the vector (and again on the way out) every frame.
+    std::uint32_t first=0;
     unsigned texture=0,wrap=0,attributes=0;
     float minY=0,maxY=0;
     bool translucent=false;
@@ -741,11 +744,13 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
     }
     DQIV_TRACE("after prepareTextures");
     std::vector<Prepared> polygons;
+    std::vector<GpuVertex> staged;   // three per polygon, in submission order
+    std::size_t triangleCount=0;
+    for(const auto& batch:batches)triangleCount+=batch.triangles.size();
     {   // Reserve once: a town frame is ~3,500 triangles, and growing the vector from
         // zero reallocated and copied it a dozen times every frame.
-        std::size_t triangles=0;
-        for(const auto& batch:batches)triangles+=batch.triangles.size();
-        polygons.reserve(triangles);
+        polygons.reserve(triangleCount);
+        staged.reserve(triangleCount*3);
     }
     std::optional<ProfileScope> stage(std::in_place,"r3d-prepare");
     std::uint32_t cachedViewport=0;const GpuMatrix* cachedTarget=nullptr;GpuMatrix cachedMatrix{};
@@ -787,6 +792,8 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
         }
         const auto& matrix=cachedMatrix;
         Prepared polygon;polygon.attributes=attributes;
+        polygon.first=static_cast<std::uint32_t>(staged.size());
+        staged.resize(polygon.first+3);   // rolled back below if the triangle is culled
         const auto parameters=triangle.material.texture,format=(parameters>>26)&7,mode=(attributes>>4)&3;
         const bool textured=format&&(options.displayControl&1);
         float size[2]={1,1};
@@ -848,10 +855,12 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
                 const float ex1=x[1]-x[0],ey1=y[1]-y[0],ex2=x[2]-x[0],ey2=y[2]-y[0];
                 const float det=ex1*ey2-ex2*ey1;
                 if(std::abs(det)>0.5f) {
-                    // Texture coordinates follow the screen (affine on a card).
+                    // Texture coordinates follow the screen (affine on a card). One
+                    // reciprocal, not four divisions: this runs per opaque sprite.
+                    const float invDet=1.f/det;
                     const float du1=t[1].u-t[0].u,dv1=t[1].v-t[0].v,du2=t[2].u-t[0].u,dv2=t[2].v-t[0].v;
-                    const float dudx=(du1*ey2-du2*ey1)/det,dudy=(du2*ex1-du1*ex2)/det;
-                    const float dvdx=(dv1*ey2-dv2*ey1)/det,dvdy=(dv2*ex1-dv1*ex2)/det;
+                    const float dudx=(du1*ey2-du2*ey1)*invDet,dudy=(du2*ex1-du1*ex2)*invDet;
+                    const float dvdx=(dv1*ey2-dv2*ey1)*invDet,dvdy=(dv2*ex1-dv1*ex2)*invDet;
                     const float side=det>0?1.f:-1.f;
                     // Half a DS pixel, more for an enlarged sprite (battle zoom):
                     // the overlap covers a good half of one of its texels (more
@@ -897,7 +906,7 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
         for(unsigned i=0;i<3;++i) {
             const auto& v=grown[i];
             const auto p=apply(matrix,v.clip);
-            auto& out=polygon.vertices[i];
+            auto& out=staged[polygon.first+i];
             std::copy(p.begin(),p.end(),out.position);
             for(unsigned c=0;c<3;++c)out.color[c]=six((v.color>>(5*c))&31)/63.f;
             out.color[3]=1;
@@ -925,7 +934,8 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
             if(area==0)visible=false;
             else if(area<0?!(attributes&0x80):!(attributes&0x40))visible=false;
         }
-        if(visible)polygons.push_back(polygon);
+        if(visible) {staged.resize(polygon.first+3);polygons.push_back(polygon);}
+        else staged.resize(polygon.first);
     }
     stage.emplace("r3d-sort");
     // Opaque polygons first in submission order, then translucent ones by
@@ -939,8 +949,11 @@ void GpuRenderer::render3D(std::span<const GpuBatch> batches,const GxRasterState
             const auto& a=polygons[i];const auto& b=polygons[j];
             return a.maxY!=b.maxY?a.maxY<b.maxY:a.minY<b.minY;
         });
-    std::vector<GpuVertex> vertices;vertices.reserve(polygons.size()*3);
-    for(const auto i:order)vertices.insert(vertices.end(),polygons[i].vertices.begin(),polygons[i].vertices.end());
+    std::vector<GpuVertex> vertices;vertices.resize(order.size()*3);
+    for(std::size_t k=0;k<order.size();++k) {
+        const auto* from=staged.data()+polygons[order[k]].first;
+        std::copy_n(from,3,vertices.data()+k*3);
+    }
 
     stage.emplace("r3d-draw");
     gl::BindFramebuffer(GL_FRAMEBUFFER,scene.framebuffer);
