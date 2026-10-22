@@ -345,6 +345,9 @@ struct GameRun {
     }
 };
 GameRun* gameRun=nullptr;   // the wasm loop callback needs a handle to it
+#ifdef __EMSCRIPTEN__
+// Only the browser build has a page to call this from; EMSCRIPTEN_KEEPALIVE does not
+// exist for MSVC, which is what CI builds on the other side.
 extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
     switch(which) {
     case 1:pc::diag::skipPresent=!pc::diag::skipPresent;break;
@@ -354,6 +357,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
     default:break;
     }
 }
+#endif
 }
 
 int main() {
