@@ -179,6 +179,15 @@ M4 里顺手做的 4 个 hedge（成本几乎为零，让 M4b 不用返工）—
 回读（见上）、`gl_ClipDistance`（varying + 片元 `discard`，**WebGL2 和 WebGPU 都要这么写**，等于免费）、
 `BlitFramebuffer` 2 处、`glFinish` 1 处。这 4 处就是 M4 全部的"语义重写"面。
 
+**2026-10 复盘（真机数据在手之后）**：`wasm` 端在第一章城镇 40fps，`f` 13.7ms 由
+`r3d 4.9`（`prep` 2.0）、`cap 4.2`（`dc` 2.5）、readback ~1.8、`pres` 1.2 构成。
+**WebGPU 能修的只有 readback 这一条**（`copyTextureToBuffer` + `mapAsync` 正是桌面端已经在用的
+两缓冲模型）：关掉 readback 实测 36 → 47fps，帧首取上一帧后到 40fps，所以异步化最多再拿回
+约 7 帧。`dc`（CPU 2D 合成）和 `prep`（CPU 三角形变换）与 GPU API 无关，换 WebGPU 一分不省。
+再叠加本节的警告（没有缓存时 WebGPU 的状态提交比 WebGL2 更慢），结论是：
+**追 60fps 应该先做"3D 层留在 GPU 上参与合成"（WebGL2 上就能做），而不是换 API。**
+WebGPU 的触发条件应当收窄为"要原生"，而不是"WebGL2 慢"——现在的慢是 CPU 侧的。
+
 **触发条件**：改主意要原生（macOS arm64 / iOS）；或者 WebGL2 撞上实际的性能/功能墙。
 注意没有缓存的话，这种"每帧改一堆状态"的负载在 WebGPU 上会比 WebGL2 **更慢**。
 
