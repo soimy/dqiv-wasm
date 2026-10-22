@@ -53,6 +53,7 @@ extern "C" {
 #include <cstdio>
 #include <exception>
 #include <iostream>
+#include <string>
 #include <vector>
 #ifndef __EMSCRIPTEN__
 #define WIN32_LEAN_AND_MEAN
@@ -209,6 +210,20 @@ struct GameRun {
             pc::ProfileScope frameTiming("render-callback");
 #ifdef __EMSCRIPTEN__
             pc::wasmBoundaryArm();   // the next read is the boundary of the next frame
+            // How long each frame actually was, bucketed. The frame rate alone cannot
+            // tell "every frame is a bit too slow" from "every other frame is dropped":
+            // the first clusters around the work, the second around the display's
+            // period, and the difference decides whether shaving a millisecond helps.
+            static double lastCallback=0.0;
+            static unsigned gaps[5]={0,0,0,0,0};
+            {
+                const double nowGap=emscripten_get_now();
+                if(lastCallback) {
+                    const double gap=nowGap-lastCallback;
+                    ++gaps[gap<17?0:gap<25?1:gap<34?2:gap<50?3:4];
+                }
+                lastCallback=nowGap;
+            }
             // One print a second, so the frame rate stays readable without flooding the journal.
             static unsigned callbackCount=0;static double windowStart=0.0;
             if(++callbackCount%60==0){
@@ -218,6 +233,12 @@ struct GameRun {
                          <<" rate "<<int(rate+0.5)<<" steps/s\n";
                 char script[64];std::snprintf(script,sizeof(script),"window.__gameSteps=%d",int(rate+0.5));
                 emscripten_run_script(script);   // so the overlay on the page can show it as well
+                char gapText[96];
+                std::snprintf(gapText,sizeof(gapText),"gaps <17ms %u  17-25 %u  25-34 %u  34-50 %u  >50 %u",
+                    gaps[0],gaps[1],gaps[2],gaps[3],gaps[4]);
+                std::string gapScript="window.__gaps='";gapScript+=gapText;gapScript+="'";
+                emscripten_run_script(gapScript.c_str());
+                for(auto& g:gaps)g=0;
             }
 #endif
             bool composed=false;

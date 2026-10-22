@@ -102,7 +102,8 @@
   setInterval(()=>{
     const g=window.__gameSteps;
     d.textContent='RAF '+frames+' Hz | game '+(g!=null?g:'?')+' steps/s'+
-      (window.__profile?'\n'+window.__profile:'');
+      (window.__profile?'\n'+window.__profile:'')+
+      (window.__gaps?'\n'+window.__gaps:'');
     frames=0;
   },1000);
 })();
