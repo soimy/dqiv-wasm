@@ -64,7 +64,9 @@ if(ROM) {
 let journal='';
 for(let k=0;k<4;k++) {
   await new Promise(r=>setTimeout(r,15000));
-  journal=(await ev(`(typeof FS!=='undefined'&&FS.analyzePath('/saves/journal.txt').exists)?new TextDecoder().decode(FS.readFile('/saves/journal.txt')):'(no journal)'`,12000)).result?.value||'';
+  // The journal used to sit in /saves; it now lives in /tmp so that the save
+  // directory's IndexedDB flush does not carry megabytes of it. Look in both.
+  journal=(await ev(`(()=>{if(typeof FS==='undefined')return '(no journal)';for(const p of ['/tmp/journal.txt','/saves/journal.txt'])if(FS.analyzePath(p).exists)return new TextDecoder().decode(FS.readFile(p));return '(no journal)'})()`,12000)).result?.value||'';
   if(journal.includes('selfcheck byte order')) break;
 }
 if(!journal||journal==='(no journal)') {console.error('FAIL: no journal - the game never started');process.exit(1)}
