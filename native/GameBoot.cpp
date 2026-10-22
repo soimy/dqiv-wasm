@@ -189,6 +189,7 @@ struct GameRun {
     bool fastFrame=false;
     unsigned boostFrames=0;
     bool running=true;
+    bool presented=false;
     int scene=-1;
     unsigned frame=0;
     struct ClearWait {~ClearWait(){pc::setWaitCallback({});pc::setFrameCallback({});}} clearWait;
@@ -219,8 +220,10 @@ struct GameRun {
                 emscripten_run_script(script);   // so the overlay on the page can show it as well
             }
 #endif
+            bool composed=false;
             if(geometry.swaps()!=renderedSwap) {
                 renderedSwap=geometry.swaps();
+                composed=true;
                 auto state=geometry.raster;
                 state.fogColor=*static_cast<unsigned*>(video.reg(0x04000358,4));
                 pc::GxRenderOptions options;
@@ -228,7 +231,11 @@ struct GameRun {
                 options.wBuffer=(geometry.swapParameters()&2)!=0;options.manualSort=(geometry.swapParameters()&1)!=0;
                 presenter.frame(video,geometry,state,options,false);
             }
-            if(!fastFrame)presenter.present();
+            // Nothing new was composed, so the canvas already shows this frame: the
+            // present uploads four recipe planes (2.9 MB) and draws, and the loop is
+            // called ~44 times a second for ~31 distinct frames. The first frame still
+            // goes through, so the canvas is never left blank.
+            if(!fastFrame&&(composed||!presented)) {presenter.present();presented=true;}
 #ifdef __EMSCRIPTEN__
             // 60 fps cap. Measured as needed, not guessed: the game's own pacing point
             // is reached only ~36 times a second while this callback runs ~147, so its
