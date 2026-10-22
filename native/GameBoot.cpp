@@ -3,6 +3,7 @@
 #include "Assets.hpp"
 #include "AssetPack.hpp"
 #include "GameServices.hpp"
+#include "Diagnostics.hpp"
 #include "NitroFilesystem.hpp"
 #include "NitroBackup.hpp"
 #include "NitroGeometry.hpp"
@@ -242,7 +243,7 @@ struct GameRun {
             }
 #endif
             bool composed=false;
-            if(geometry.swaps()!=renderedSwap) {
+            if(geometry.swaps()!=renderedSwap&&!pc::diag::skip3D) {
                 renderedSwap=geometry.swaps();
                 composed=true;
                 auto state=geometry.raster;
@@ -256,7 +257,7 @@ struct GameRun {
             // present uploads four recipe planes (2.9 MB) and draws, and the loop is
             // called ~44 times a second for ~31 distinct frames. The first frame still
             // goes through, so the canvas is never left blank.
-            if(!fastFrame&&(composed||!presented)) {presenter.present();presented=true;}
+            if(!fastFrame&&(composed||!presented)&&!pc::diag::skipPresent) {presenter.present();presented=true;}
 #ifdef __EMSCRIPTEN__
             // 60 fps cap. Measured as needed, not guessed: the game's own pacing point
             // is reached only ~36 times a second while this callback runs ~147, so its
@@ -344,6 +345,15 @@ struct GameRun {
     }
 };
 GameRun* gameRun=nullptr;   // the wasm loop callback needs a handle to it
+extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
+    switch(which) {
+    case 1:pc::diag::skipPresent=!pc::diag::skipPresent;break;
+    case 2:pc::diag::skip3D=!pc::diag::skip3D;break;
+    case 3:pc::diag::skipReadback=!pc::diag::skipReadback;break;
+    case 4:pc::diag::skipUpload=!pc::diag::skipUpload;break;
+    default:break;
+    }
+}
 }
 
 int main() {

@@ -5,6 +5,7 @@
 #include "GxTextures.hpp"
 #include "Profile.hpp"
 #include "PixelOrder.hpp"
+#include "Diagnostics.hpp"
 #include <algorithm>
 #include "Parallel.hpp"
 #include <cmath>
@@ -1087,6 +1088,7 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     // rather than hidden.
     immediate=true;
 #endif
+    if(diag::skipReadback)return;
     ProfileScope timing(immediate?"readNative-sync":"readNative");
     resize(native_,256,192,false,false);
     gl::BindFramebuffer(GL_FRAMEBUFFER,native_.framebuffer);gl::Viewport(0,0,256,192);
@@ -1147,6 +1149,7 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
     constexpr std::size_t plane=std::size_t(256)*GpuLayout::recipeRows;
     if(recipes.size()!=plane*4)throw std::runtime_error("Composition recipes have an unexpected size");
+    if(!diag::skipUpload)
     for(unsigned plane=0;plane<4;++plane) {
         gl::BindTexture(GL_TEXTURE_2D,recipeTextures_[plane]);
         gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);

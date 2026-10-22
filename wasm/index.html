@@ -103,9 +103,25 @@
     const g=window.__gameSteps;
     d.textContent='RAF '+frames+' Hz | game '+(g!=null?g:'?')+' steps/s'+
       (window.__profile?'\n'+window.__profile:'')+
-      (window.__gaps?'\n'+window.__gaps:'');
+      (window.__gaps?'\n'+window.__gaps:'')+
+      (window.__diag?'\n'+window.__diag:'');
     frames=0;
   },1000);
+})();
+// 1-4 switch a render stage off while the game runs: the frame rate then says what
+// that stage costs on this machine, which is the one thing a headless build cannot
+// answer for a real GPU. Pressing the same key again puts it back.
+(function(){
+  const names={1:'present',2:'3D',3:'readback',4:'upload'};
+  const off=new Set();
+  addEventListener('keydown',e=>{
+    const n=parseInt(e.key,10);
+    if(!(n>=1&&n<=4)||!window.Module||!Module._dqiv_toggle)return;
+    e.preventDefault();
+    Module._dqiv_toggle(n);
+    off.has(n)?off.delete(n):off.add(n);
+    window.__diag=off.size?'off: '+[...off].map(x=>names[x]).join(' + '):'';
+  },true);
 })();
 // F10 saves the journal the game wrote, so the numbers behind a bad frame rate can
 // be read here instead of in DevTools. The file lives in the page's memory (MEMFS),
