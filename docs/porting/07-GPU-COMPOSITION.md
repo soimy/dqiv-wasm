@@ -96,6 +96,28 @@ compose probe: 120 frames, main ok 0 [display mode 2 119] [background mode 3 1],
 下一段应当先做：显示模式 2（采样 VRAM 位图）、仿射 BG、精灵。这也说明 B4（捕获上 GPU）
 不是收尾项，而是主引擎画面本身。
 
+**城镇实机（2520 帧，用户机）证实了同一件事，而且更彻底**：
+
+```
+compose probe: 2520 frames, main ok 0 [background mode 3 131] [display mode 2 2389],
+                              sub ok 0 [background mode 3 2389] [sprites 131]
+frame 15690  r3d-prepare 3017  render3D 6023  display-compose 2800  display-read 997
+             display-capture 683  readNative 1483  present 1247
+```
+
+主引擎 **95% 的帧是显示模式 2**——屏幕上那幅画就是"3D 帧被读回、捕获进 VRAM、再整屏当位图显示"。
+`readNative 1483 + display-capture 683 + display-compose 2800 + display-read 997` 这 ~6ms
+全是为这一条服务。子引擎是 BG 模式 3（BG3 仿射），另有 131 帧带精灵。
+
+所以路线要改成：**主屏那条路整条重写**，而不是把 `Display::engine` 一行行搬过去。
+
+- **B2c（新，最高优先）显示模式 2 + 仿射 BG + 精灵**：把 GPU 合成的覆盖面补到游戏真正用的组合；
+  另有 131 帧是 BG 模式 3 + 精灵，落在仿射/精灵这两块里。
+- **B2d 主屏直通**：主引擎是 mode 2 时，画面就是 3D 帧本身——直接采样 3D 目标（捕获之后则采样
+  捕获纹理），`dr`/`dc`/`display-capture`/`readNative` 整条不再需要。
+- **B4 捕获上 GPU**：捕获 = 把 3D/画布纹理 blit 进捕获纹理；只有 CPU 真去读那段 VRAM
+  （DMA、纹理上传）时才惰性读回一次。
+
 **B3 画布着色器接上（1 天）**
 `present()` 不再传 recipe；画布着色器采样 screen0/screen1 + 3D 纹理，面板/内嵌/band/HD 的
 布局逻辑保留（配方里 kind 1/2 的语义用 coverage 纹理表达）。
