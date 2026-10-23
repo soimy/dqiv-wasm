@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <nitro/native_video.h>
@@ -157,8 +158,22 @@ void* NitroVideo::lcdcSource(std::uint32_t address,std::size_t size) {
         throw std::runtime_error("LCDC source outside video memory");
     for(std::size_t done=0;done<size;) {
         const auto maps=mappings(address+static_cast<unsigned>(done));
-        if(maps.size()!=1 || maps[0].offset!=offset+done)
-            throw std::runtime_error("LCDC source bank is not CPU accessible");
+        if(maps.size()!=1 || maps[0].offset!=offset+done) {
+            // The LCDC can see a bank the CPU cannot, and this port has no third
+            // observer to read it. On the console the equivalent read returns whatever
+            // the bus decodes; here it is zeros, and the capture that asked for them is
+            // blank. Throwing instead took the whole game down on a path a player
+            // reaches by touching the command window's corner button (the double-3D
+            // blur capture), so it is a warning, once, and zeros.
+            static bool warned=false;
+            if(!warned) {
+                warned=true;
+                std::fprintf(stderr,"video: LCDC source 0x%08x is not CPU accessible; reading zeros\n",address);
+            }
+            static std::vector<std::uint8_t> zeros;
+            if(zeros.size()<size)zeros.assign(size,0);
+            return zeros.data();
+        }
         done+=std::min(size-done,maps[0].size);
     }
     return vram_.data()+offset;
