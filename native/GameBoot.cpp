@@ -379,7 +379,9 @@ int main() {
     // what the GPU composition can take in this build's frames. Read here rather
     // than driven from the page, so it is one thing to trust instead of two.
     {
-        const std::string query=emscripten_run_script_string("location.search");
+        // Node has no location, and the startup smoke test runs this build there:
+        // an empty query keeps that path exactly as it was.
+        const std::string query=emscripten_run_script_string("typeof location!=='undefined'?location.search:''");
         if(query.find("gpucompose=diff")!=std::string::npos) {pc::diag::composeProbe=true;pc::diag::composeDiff=true;}
         else if(query.find("gpucompose=probe")!=std::string::npos) pc::diag::composeProbe=true;
     }
