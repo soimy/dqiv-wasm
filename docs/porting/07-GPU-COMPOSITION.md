@@ -75,6 +75,15 @@ GPU 不支持的组合（含 `mode==3`、FIFO、捕获源的特殊态）自动�
 验收：`?gpucompose=diff` 下两条路对同一帧逐像素比对，城镇/战斗/菜单/标题四场景差异为 0（或
 仅已知的 1 LSB）；不支持的组合计数为 0 且落回正确。
 
+B2 的**第一段已落地**（`compose2dFragment` + `GpuRenderer::composeScreen`）：文本 BG0–3
+（4bpp/8bpp、5 种尺寸、优先级、倒置位）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、BLDY、
+主亮度；由 `?gpucompose`（下一步接）选择，未覆盖的态（精灵、窗口、仿射、马赛克、扩展调色板、
+BF 模式 2–5、BG0 画 3D）一律回退 CPU。
+自检 `selfcheck gpu compose: ok (blend 0, plain 0 of 49152 differ)`：构造一个滚动的文本 BG
+（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与 GPU 合成，两种寄存器
+配置（有/无混合+亮度）逐像素为 0 差异。过程中抓到两个真错：主引擎的 BG 调色板基址是
+`0x05000000`（不是 `0x200`，那是 OBJ 调色板），以及着色器输出把 ARGB 写成了 BGR。
+
 **B3 画布着色器接上（1 天）**
 `present()` 不再传 recipe；画布着色器采样 screen0/screen1 + 3D 纹理，面板/内嵌/band/HD 的
 布局逻辑保留（配方里 kind 1/2 的语义用 coverage 纹理表达）。

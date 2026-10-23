@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -114,6 +115,14 @@ public:
     // the last call goes up; a frame that changed nothing costs a scan of 164
     // stamps and two stamp comparisons.
     void uploadDisplaySources(NitroVideo&);
+    // Stage B2 of the same plan: one screen's 2D layers composed on the GPU.
+    // Returns false, with a reason, when the engine's state is not handled
+    // there yet and the caller has to keep the CPU composition. So far: text
+    // backgrounds, no sprites, windows, mosaic, extended palettes or affine.
+    bool composeScreen(NitroVideo&,bool sub,std::string& why);
+    unsigned screenTexture(bool sub) const {return screens_[sub?1:0].color;}
+    // The composed screen, top-down ARGB (verification only).
+    std::vector<std::uint32_t> readScreen(bool sub);
     unsigned vramTexture() const {return sourceVram_;}
     unsigned paletteTexture() const {return sourcePalette_;}
     unsigned oamTexture() const {return sourceOam_;}
@@ -154,6 +163,8 @@ private:
     unsigned vertexArray_=0,vertexBuffer_=0,emptyArray_=0;
     unsigned recipeTextures_[4]{},sideColumns_=0;
     unsigned sourceVram_=0,sourcePalette_=0,sourceOam_=0;
+    unsigned compose2dProgram_=0;
+    Target screens_[2];
     std::array<std::uint32_t,NitroVideo::vramBlockCount> vramSeen_{};
     std::uint32_t paletteSeen_=0,oamSeen_=0;
     unsigned hdAtlas_=0; // HdPictures cells, upscaled and premultiplied

@@ -27,6 +27,7 @@ const want=[
   'selfcheck clip order swapped: two-in-one-call-first 4888, single-second 2436',
   'selfcheck clip: inside 2436, straddling 1218, outside 0 -> ok',
   'selfcheck compose sources: ok',
+  'selfcheck gpu compose: ok (blend 0, plain 0 of 49152 differ)',
 ];
 
 // .json() returns a Promise, so it has to be awaited before the field is read - reading it

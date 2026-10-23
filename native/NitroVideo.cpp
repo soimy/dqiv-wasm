@@ -179,6 +179,17 @@ void* NitroVideo::lcdcSource(std::uint32_t address,std::size_t size) {
     }
     return vram_.data()+offset;
 }
+std::array<std::int32_t,4> NitroVideo::vramWindowBases(std::array<std::uint32_t,4>& sizes) const {
+    std::array<std::int32_t,4> bases{-1,-1,-1,-1};
+    sizes={0,0,0,0};
+    for(unsigned window=0;window<4;++window) {
+        const auto maps=mappings(0x06000000u+window*0x20000);
+        if(maps.empty())continue;
+        bases[window]=static_cast<std::int32_t>(maps[0].offset);
+        sizes[window]=static_cast<std::uint32_t>(std::min<std::size_t>(maps[0].size,0x20000));
+    }
+    return bases;
+}
 void NitroVideo::stampVram(std::size_t offset,std::size_t size) {
     if(!size)return;
     const std::uint32_t stamp=++stamp_;

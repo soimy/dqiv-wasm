@@ -383,6 +383,113 @@ void main() {
     oColor=vec4(color,1.0);
 })";
 
+// The DS display engine's 2D composition, per pixel, on the GPU: stage B2 of
+// docs/porting/07-GPU-COMPOSITION.md. It reads the same sources the CPU path
+// reads - VRAM through the LCDC mapping, palette RAM - and reproduces its
+// arithmetic exactly (six-bit channels, integer blends), because anything that
+// rounds differently would show up as a colour that is off by one.
+const char* compose2dFragment=DQIV_GLSL_HEADER R"(
+precision highp usampler2D;
+in vec2 vPosition;
+out vec4 oColor;
+uniform usampler2D uVram;     // physical VRAM, 1024 texels to a row
+uniform usampler2D uPalette;  // palette RAM, one 16-bit entry per texel
+uniform vec4 uBgCnt[4];       // BGxCNT
+uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
+uniform vec4 uWinBase;        // physical offset of each 128 KB VRAM window, -1 unmapped
+uniform vec4 uWinSize;        // its length
+uniform vec4 uScreen;         // backdrop colour (15-bit), DISPCNT, BLDCNT, BLDALPHA
+uniform vec4 uEffects;        // BLDY, MASTER_BRIGHT, palette base, -
+const int kBase=0x06000000;
+uint vram8(int address) {
+    int window=(address>>17)&3;
+    int within=address&0x1ffff;
+    int base=int(uWinBase[window]);
+    if(base<0||within>=int(uWinSize[window]))return 0u;
+    int physical=base+within;
+    return texelFetch(uVram,ivec2(physical&1023,physical>>10),0).r;
+}
+uint vram16(int address) {return vram8(address)|(vram8(address+1)<<8);}
+uint paletteEntry(int index) {return texelFetch(uPalette,ivec2(index,0),0).r;}
+// BGR555 to ARGB, expanded the way Display::rgb does: (v<<3)|(v>>2).
+uint rgb15(uint c) {
+    uint r=c&31u,g=(c>>5)&31u,b=(c>>10)&31u;
+    r=(r<<3)|(r>>2);g=(g<<3)|(g>>2);b=(b<<3)|(b>>2);
+    return 0xff000000u|(r<<16)|(g<<8)|b;
+}
+// Display::blend, exactly: six-bit channels, clamped at 63, shifted by `shift`,
+// then expanded back to eight bits.
+uint blend(uint a,uint b,int eva,int evb,int shift) {
+    uint result=0u;
+    for(int s=0;s<3;++s) {
+        int sh=s*8;
+        int av=int((a>>uint(sh))&255u)>>2;
+        int bv=int((b>>uint(sh))&255u)>>2;
+        int v=min(63,(av*eva+bv*evb)>>shift);
+        result|=uint((v<<2)|(v>>4))<<uint(sh);
+    }
+    return 0xff000000u|result;
+}
+uint brightness(uint c,int mode,int amount) {
+    if(mode!=1&&mode!=2)return c;
+    return mode==1?blend(c,0xffffffffu,16-amount,amount,4):blend(c,0xff000000u,16-amount,amount,4);
+}
+// A text background's pixel, or 0 where it is transparent.
+uint bgPixel(int bg,int x,int y) {
+    int cnt=int(uBgCnt[bg].x);
+    int charBase=((cnt>>2)&15)*0x4000;
+    int screenBase=((cnt>>8)&31)*0x800;
+    bool eight=((cnt>>7)&1)!=0;
+    int size=(cnt>>14)&3;
+    int w=(size&1)!=0?512:256,h=(size&2)!=0?512:256;
+    int hofs=int(uBgOff[bg].x),vofs=int(uBgOff[bg].y);
+    int sx=(x+hofs)&(w-1),sy=(y+vofs)&(h-1);
+    uint entry=vram16(kBase+screenBase+(((sy>>3)*(w>>3))+(sx>>3))*2);
+    int tile=int(entry&1023u),bank=int((entry>>12)&15u);
+    int px=sx&7,py=sy&7;
+    uint index;
+    if(eight) index=vram8(kBase+charBase+tile*64+py*8+px);
+    else {
+        uint packed=vram8(kBase+charBase+tile*32+py*4+(px>>1));
+        index=((px&1)!=0)?(packed>>4):(packed&15u);
+    }
+    if(index==0u)return 0u;
+    int paletteBase=int(uEffects.z);
+    return rgb15(paletteEntry(paletteBase+(eight?int(index):bank*16+int(index))));
+}
+void main() {
+    ivec2 p=ivec2(int(vPosition.x*256.0),191-int(vPosition.y*192.0));
+    int control=int(uScreen.y),bldcnt=int(uScreen.z),bldalpha=int(uScreen.w);
+    uint backdrop=rgb15(uint(int(uScreen.x)));
+    uint colour[5];int key[5];
+    for(int i=0;i<5;++i){colour[i]=0u;key[i]=99;}
+    for(int bg=0;bg<4;++bg) {
+        if((control&(0x100<<bg))==0)continue;
+        uint c=bgPixel(bg,p.x,p.y);
+        if(c==0u)continue;
+        colour[bg]=c;key[bg]=(int(uBgCnt[bg].x)&3)*5+bg+1;
+    }
+    // The two highest-priority layers decide the colour, as Display::compose.
+    int first=5,second=5,k1=99,k2=99;
+    for(int l=0;l<5;++l) {
+        if(colour[l]==0u)continue;
+        if(key[l]<k1){second=first;k2=k1;first=l;k1=key[l];}
+        else if(key[l]<k2){second=l;k2=key[l];}
+    }
+    uint top=first==5?backdrop:(colour[first]|0xff000000u);
+    uint below=second==5?backdrop:(colour[second]|0xff000000u);
+    int eva=bldalpha&31,evb=(bldalpha>>8)&31,effect=(bldcnt>>6)&3;
+    bool target2=(second==5)?((bldcnt&0x2000)!=0):((bldcnt&(0x100<<second))!=0);
+    bool target1=(first==5)?((bldcnt&0x20)!=0):((bldcnt&(1<<first))!=0);
+    uint c=top;
+    if(target1&&effect==1&&target2)c=blend(top,below,eva,evb,4);
+    else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
+    int master=int(uEffects.y);
+    c=brightness(c,(master>>14)&3,min(16,master&31));
+    // c is ARGB: R in bits 16-23, B in 0-7. The target is RGBA.
+    oColor=vec4(float((c>>16)&255u)/255.0,float((c>>8)&255u)/255.0,float(c&255u)/255.0,1.0);
+})";
+
 unsigned compile(unsigned type,const char* source) {
     const auto shader=gl::CreateShader(type);
     gl::ShaderSource(shader,1,&source,nullptr);gl::CompileShader(shader);
@@ -473,6 +580,7 @@ GpuRenderer::GpuRenderer() {
     program_=link(sceneVertex,sceneFragment);
     fogProgram_=link(fullscreenVertex,fogFragment);
     composeProgram_=link(fullscreenVertex,composeFragment);
+    compose2dProgram_=link(fullscreenVertex,compose2dFragment);
     reduceProgram_=link(fullscreenVertex,reduceFragment);
     overlayProgram_=link(overlayVertex,overlayFragment);
     gl::GenVertexArrays(1,&vertexArray_);gl::GenVertexArrays(1,&emptyArray_);gl::GenBuffers(1,&vertexBuffer_);
@@ -1224,6 +1332,82 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
         oamSeen_=video.oamStamp();
     }
     gl::BindTexture(GL_TEXTURE_2D,0);
+}
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
+    const unsigned base=0x04000000+(sub?0x1000:0);
+    const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
+    const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
+    why.clear();
+    // What this stage handles. Everything else stays with Display, which is the
+    // reference the GPU path is checked against; a scene that falls back keeps
+    // working exactly as before.
+    if(control&128) {why="forced blank";return false;}
+    if(((control>>16)&3)!=1) {why="display mode";return false;}
+    const unsigned mode=control&7;
+    if(mode>1) {why="display mode 2-5";return false;}
+    if(control&0x1000) {why="sprites";return false;}
+    if(control&0xe000) {why="windows";return false;}
+    if(control&(1u<<30)) {why="extended palettes";return false;}
+    if(!sub&&(control&8)) {why="BG0 draws 3D";return false;}
+    for(unsigned bg=0;bg<4;++bg)if(control&(0x100<<bg)) {
+        const unsigned cnt=reg16(base+8+bg*2);
+        if((cnt&0x2000)||(mode==1&&bg==3)) {why="affine background";return false;}
+        if(cnt&0x40) {why="mosaic";return false;}
+    }
+    if(!sourceVram_)uploadDisplaySources(video);
+    std::array<std::uint32_t,4> windowSizes{};
+    const auto windowBases=video.vramWindowBases(windowSizes);
+    float bgCnt[16]={0},bgOff[16]={0};
+    for(unsigned bg=0;bg<4;++bg) {
+        bgCnt[bg*4]=float(reg16(base+8+bg*2));
+        bgOff[bg*4]=float(reg16(base+0x10+bg*4)&511);
+        bgOff[bg*4+1]=float(reg16(base+0x12+bg*4)&511);
+    }
+    const float windowBase[4]={float(windowBases[0]),float(windowBases[1]),float(windowBases[2]),float(windowBases[3])};
+    const float windowLength[4]={float(windowSizes[0]),float(windowSizes[1]),float(windowSizes[2]),float(windowSizes[3])};
+    const auto palette=video.palette();
+    const auto paletteWord=[&](std::size_t offset) {
+        return unsigned(palette[offset])|(unsigned(palette[offset+1])<<8);
+    };
+    // The backdrop is palette entry 0 of the engine's own palette block.
+    const float screen[4]={float(paletteWord(sub?0x400:0)),float(control),float(reg16(base+0x50)),float(reg16(base+0x52))};
+    // Background palettes: engine A's start at 0x05000000 (entry 0), engine B's
+    // at 0x05000400 (entry 0x200). Entry 0 doubles as the backdrop of each.
+    const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),0};
+    resize(screens_[sub?1:0],256,192,false,false);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,screens_[sub?1:0].framebuffer);
+    gl::Viewport(0,0,256,192);
+    gl::Disable(GL_BLEND);gl::Disable(GL_DEPTH_TEST);gl::Disable(GL_SCISSOR_TEST);
+    gl::ColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    gl::UseProgram(compose2dProgram_);gl::BindVertexArray(emptyArray_);
+    gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
+    gl::ActiveTexture(GL_TEXTURE1);gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
+    gl::Uniform1i(uniform(compose2dProgram_,"uVram"),0);
+    gl::Uniform1i(uniform(compose2dProgram_,"uPalette"),1);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uBgCnt"),4,bgCnt);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uBgOff"),4,bgOff);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uWinBase"),1,windowBase);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uWinSize"),1,windowLength);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uScreen"),1,screen);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uEffects"),1,effects);
+    gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
+    gl::ActiveTexture(GL_TEXTURE0);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+    return true;
+}
+std::vector<std::uint32_t> GpuRenderer::readScreen(bool sub) {
+    const auto& target=screens_[sub?1:0];
+    std::vector<std::uint32_t> raw(std::size_t(256)*192),pixels(raw.size());
+    if(!target.framebuffer)return pixels;
+    gl::BindFramebuffer(GL_FRAMEBUFFER,target.framebuffer);gl::PixelStorei(GL_PACK_ALIGNMENT,4);
+    gl::ReadPixels(0,0,256,192,GL_RGBA,GL_UNSIGNED_BYTE,raw.data());
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+    for(int row=0;row<192;++row)std::copy_n(raw.data()+std::size_t(191-row)*256,256,pixels.data()+std::size_t(row)*256);
+    for(auto& p:pixels) {
+        const unsigned a=p>>24,r=p&255,g=(p>>8)&255,b=(p>>16)&255;
+        p=(a<<24)|(r<<16)|(g<<8)|b;
+    }
+    return pixels;
 }
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
     constexpr std::size_t plane=std::size_t(256)*GpuLayout::recipeRows;

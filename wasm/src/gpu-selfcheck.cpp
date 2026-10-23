@@ -30,6 +30,7 @@
 #include "GxRasterizer.hpp"
 #include "GlLoader.hpp"
 #include "NitroVideo.hpp"
+#include "Display.hpp"
 #include <cstdio>
 #include <exception>
 
@@ -276,6 +277,88 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
     } catch(const std::exception& error) {
         // A check that takes the game down at boot is worse than no check.
         std::printf("selfcheck compose sources: threw %s\n",error.what());
+    }
+
+    // --- gpu compose -------------------------------------------------------
+    // Stage B2: one crafted 2D scene through Display (the reference on the CPU)
+    // and through the GPU composition. A text background with a scrolled map,
+    // sixteen palette banks, alpha blending onto the backdrop and a master
+    // brightness exercises the addressing, the priority order, the six-bit
+    // blend arithmetic and the brightness at once - and any of them wrong shows
+    // as a colour that differs by one.
+    try {
+        auto& video=activeVideo();
+        auto* bank=static_cast<std::uint8_t*>(video.reg(0x04000240,1));
+        const std::uint8_t bankBefore=*bank;*bank=0x81;   // bank A at 0x06000000
+        auto* control=static_cast<std::uint32_t*>(video.reg(0x04000000,4));
+        auto* bg0=static_cast<std::uint16_t*>(video.reg(0x04000008,2));
+        auto* hofs=static_cast<std::uint16_t*>(video.reg(0x04000010,2));
+        auto* vofs=static_cast<std::uint16_t*>(video.reg(0x04000012,2));
+        auto* bldcnt=static_cast<std::uint16_t*>(video.reg(0x04000050,2));
+        auto* bldalpha=static_cast<std::uint16_t*>(video.reg(0x04000052,2));
+        auto* master=static_cast<std::uint16_t*>(video.reg(0x0400006c,2));
+        const unsigned controlBefore=*control,bg0Before=*bg0,hofsBefore=*hofs,vofsBefore=*vofs,
+            bldcntBefore=*bldcnt,bldalphaBefore=*bldalpha,masterBefore=*master;
+        std::vector<std::uint8_t> vram(0x8000,0);
+        // Four 4bpp tiles at char base 0; index 0 occurs, so transparency is real.
+        for(unsigned t=0;t<4;++t)for(unsigned r=0;r<8;++r)for(unsigned x=0;x<8;x+=2) {
+            const unsigned lo=(t*5+r*3+x)%16,hi=(t*3+r*7+x+1)%16;
+            vram[t*32+r*4+x/2]=std::uint8_t(lo|(hi<<4));
+        }
+        // Screen map at screen base 8 (0x4000): tiles and palette banks change
+        // every two columns, so a wrong map stride is visible.
+        for(unsigned my=0;my<32;++my)for(unsigned mx=0;mx<32;++mx) {
+            const unsigned entry=((mx/2+my)%4)|((((mx+my/2)%16))<<12);
+            vram[0x4000+(my*32+mx)*2]=std::uint8_t(entry);
+            vram[0x4000+(my*32+mx)*2+1]=std::uint8_t(entry>>8);
+        }
+        video.write(0x06000000,vram);
+        // Engine A's background palettes start at 0x05000000 and entry 0 is the
+        // backdrop as well; entries 1.. are the sixteen-colour banks.
+        std::vector<std::uint8_t> bgPalette(0x200,0);
+        {
+            const unsigned red=0x001f;
+            bgPalette[0]=std::uint8_t(red);bgPalette[1]=std::uint8_t(red>>8);
+        }
+        for(unsigned i=1;i<256;++i) {
+            const unsigned c=((i*7)&31)|(((i*3)&31)<<5)|(((i*11)&31)<<10);
+            bgPalette[i*2]=std::uint8_t(c);bgPalette[i*2+1]=std::uint8_t(c>>8);
+        }
+        video.write(0x05000000,bgPalette);
+        *control=0x00010100u;   // display mode 1, mode 0 (text), BG0 on
+        *bg0=0x0800;            // priority 0, char base 0, 4bpp, screen base 8
+        *hofs=3;*vofs=5;
+        *bldcnt=0x2041;         // BG0 first target, alpha, backdrop second
+        *bldalpha=0x0808;
+        *master=0x4004;         // brightness up by 4/16
+        auto run=[&](const char* label,unsigned blend) {
+            *bldcnt=static_cast<std::uint16_t>(blend);*master=static_cast<std::uint16_t>(blend?0x4004:0);
+            window.gpu().uploadDisplaySources(video);
+            Display reference;
+            reference.frame(video,{},true);
+            std::string why;
+            const bool composed=window.gpu().composeScreen(video,false,why);
+            if(!composed) {std::printf("  gpu compose: %s not composed: %s\n",label,why.c_str());return 0u;}
+            const auto gpu=window.gpu().readScreen(false);
+            const auto cpu=reference.pixels();
+            const std::size_t at=reference.mainOnTop()?0:std::size_t(256)*192;
+            unsigned different=0;
+            for(std::size_t i=0;i<std::size_t(256)*192;++i) {
+                if(gpu[i]!=cpu[at+i]) {
+                    if(different<3)std::printf("  gpu compose: %s (%zu,%zu) gpu %08x cpu %08x\n",label,i%256,i/256,gpu[i],cpu[at+i]);
+                    ++different;
+                }
+            }
+            return different;
+        };
+        const unsigned blended=run("blend",0x2041),plain=run("plain",0);
+        const bool same=blended==0&&plain==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u of %u differ)\n",
+            same?"ok":"FAILED",blended,plain,256u*192u);
+        *control=controlBefore;*bg0=bg0Before;*hofs=hofsBefore;*vofs=vofsBefore;
+        *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;*bank=bankBefore;
+    } catch(const std::exception& error) {
+        std::printf("selfcheck gpu compose: threw %s\n",error.what());
     }
 }
 }
