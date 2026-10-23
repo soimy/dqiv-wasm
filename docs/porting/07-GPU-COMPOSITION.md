@@ -111,7 +111,8 @@ frame 15690  r3d-prepare 3017  render3D 6023  display-compose 2800  display-read
 
 所以路线要改成：**主屏那条路整条重写**，而不是把 `Display::engine` 一行行搬过去。
 
-- **B2c（新，最高优先）显示模式 2 + 仿射 BG + 精灵**：把 GPU 合成的覆盖面补到游戏真正用的组合；
+- **B2c（新，最高优先）显示模式 2 + 仿射 BG + 精灵**：显示模式 2 已完成（`2d8c66d`，
+  自检 `mode2 0 of 49152 differ`）；剩下仿射 BG 与精灵。把 GPU 合成的覆盖面补到游戏真正用的组合；
   另有 131 帧是 BG 模式 3 + 精灵，落在仿射/精灵这两块里。
 - **B2d 主屏直通**：主引擎是 mode 2 时，画面就是 3D 帧本身——直接采样 3D 目标（捕获之后则采样
   捕获纹理），`dr`/`dc`/`display-capture`/`readNative` 整条不再需要。
