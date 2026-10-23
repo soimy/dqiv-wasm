@@ -285,20 +285,35 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
     // sixteen palette banks, alpha blending onto the backdrop and a master
     // brightness exercises the addressing, the priority order, the six-bit
     // blend arithmetic and the brightness at once - and any of them wrong shows
-    // as a colour that differs by one.
+    // as a colour that differs by one. The affine runs add the matrix, the
+    // 8-bit and 16-bit maps, the flip bits, the overflow wrap bit and - for
+    // engine B - the other VRAM window and palette block.
     try {
         auto& video=activeVideo();
-        auto* bank=static_cast<std::uint8_t*>(video.reg(0x04000240,1));
-        const std::uint8_t bankBefore=*bank;*bank=0x81;   // bank A at 0x06000000
-        auto* control=static_cast<std::uint32_t*>(video.reg(0x04000000,4));
-        auto* bg0=static_cast<std::uint16_t*>(video.reg(0x04000008,2));
-        auto* hofs=static_cast<std::uint16_t*>(video.reg(0x04000010,2));
-        auto* vofs=static_cast<std::uint16_t*>(video.reg(0x04000012,2));
-        auto* bldcnt=static_cast<std::uint16_t*>(video.reg(0x04000050,2));
-        auto* bldalpha=static_cast<std::uint16_t*>(video.reg(0x04000052,2));
-        auto* master=static_cast<std::uint16_t*>(video.reg(0x0400006c,2));
-        const unsigned controlBefore=*control,bg0Before=*bg0,hofsBefore=*hofs,vofsBefore=*vofs,
-            bldcntBefore=*bldcnt,bldalphaBefore=*bldalpha,masterBefore=*master;
+        auto* bankA=static_cast<std::uint8_t*>(video.reg(0x04000240,1));
+        auto* bankC=static_cast<std::uint8_t*>(video.reg(0x04000242,1));
+        const std::uint8_t bankABefore=*bankA,bankCBefore=*bankC;
+        *bankA=0x81;   // bank A at 0x06000000
+        auto reg16=[&](unsigned address) {return static_cast<std::uint16_t*>(video.reg(address,2));};
+        auto reg32=[&](unsigned address) {return static_cast<std::uint32_t*>(video.reg(address,4));};
+        auto* control=reg32(0x04000000);
+        auto* bg0=reg16(0x04000008);
+        auto* bg3=reg16(0x0400000e);
+        auto* hofs=reg16(0x04000010);
+        auto* vofs=reg16(0x04000012);
+        auto* bldcnt=reg16(0x04000050);
+        auto* bldalpha=reg16(0x04000052);
+        auto* master=reg16(0x0400006c);
+        auto* subControl=reg32(0x04001000);
+        auto* subBg3=reg16(0x0400100e);
+        const unsigned controlBefore=*control,bg0Before=*bg0,bg3Before=*bg3,hofsBefore=*hofs,vofsBefore=*vofs,
+            bldcntBefore=*bldcnt,bldalphaBefore=*bldalpha,masterBefore=*master,
+            subControlBefore=*subControl,subBg3Before=*subBg3;
+        std::array<std::uint16_t,12> affineBefore{},subAffineBefore{};
+        for(unsigned i=0;i<12;++i) {
+            affineBefore[i]=*reg16(0x04000030+i*2);
+            subAffineBefore[i]=*reg16(0x04001030+i*2);
+        }
         std::vector<std::uint8_t> vram(0x8000,0);
         // Four 4bpp tiles at char base 0; index 0 occurs, so transparency is real.
         for(unsigned t=0;t<4;++t)for(unsigned r=0;r<8;++r)for(unsigned x=0;x<8;x+=2) {
@@ -331,17 +346,17 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         *bldcnt=0x2041;         // BG0 first target, alpha, backdrop second
         *bldalpha=0x0808;
         *master=0x4004;         // brightness up by 4/16
-        auto run=[&](const char* label,unsigned blend) {
-            *bldcnt=static_cast<std::uint16_t>(blend);*master=static_cast<std::uint16_t>(blend?0x4004:0);
+        auto run=[&](const char* label,unsigned blend,bool subEngine=false) {
+            *bldcnt=std::uint16_t(blend);*master=std::uint16_t(blend?0x4004:0);
             window.gpu().uploadDisplaySources(video);
             Display reference;
             reference.frame(video,{},true);
             std::string why;
-            const bool composed=window.gpu().composeScreen(video,false,why);
+            const bool composed=window.gpu().composeScreen(video,subEngine,why);
             if(!composed) {std::printf("  gpu compose: %s not composed: %s\n",label,why.c_str());return 0u;}
-            const auto gpu=window.gpu().readScreen(false);
+            const auto gpu=window.gpu().readScreen(subEngine);
             const auto cpu=reference.pixels();
-            const std::size_t at=reference.mainOnTop()?0:std::size_t(256)*192;
+            const std::size_t at=(((subEngine?1:0)==0)==reference.mainOnTop())?0:std::size_t(256)*192;
             unsigned different=0;
             for(std::size_t i=0;i<std::size_t(256)*192;++i) {
                 if(gpu[i]!=cpu[at+i]) {
@@ -352,25 +367,94 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             return different;
         };
         const unsigned blended=run("blend",0x2041),plain=run("plain",0);
+        // --- affine backgrounds ------------------------------------------------
+        // Tiles are 256 colours; the map is one byte per tile in modes 1/2/4
+        // (8-bit) or a 16-bit entry with flip bits in modes 3/4/5. Engine B
+        // reads its own window (0x06200000) and palette block (0x05000400).
+        auto tiles=[](unsigned count) {
+            std::vector<std::uint8_t> chars(std::size_t(count)*64);
+            for(unsigned t=0;t<count;++t)for(unsigned p=0;p<64;++p)
+                chars[std::size_t(t)*64+p]=std::uint8_t((t+p)%9==0?0:((p*29+t*37+1)&255));
+            return chars;
+        };
+        std::vector<std::uint8_t> map16(32*32*2);
+        for(unsigned my=0;my<32;++my)for(unsigned mx=0;mx<32;++mx) {
+            unsigned entry=(mx*5+my*3)%16;
+            if(((mx+2*my)&7)==0)entry|=0x400;    // horizontal flip
+            if(((3*mx+my)&7)==0)entry|=0x800;    // vertical flip
+            map16[(my*32+mx)*2]=std::uint8_t(entry);
+            map16[(my*32+mx)*2+1]=std::uint8_t(entry>>8);
+        }
+        std::vector<std::uint8_t> map8(256);
+        for(unsigned i=0;i<256;++i)map8[i]=std::uint8_t((i*5+(i/16)*3)%16);
+        auto setAffine=[&](unsigned at,int pa,int pb,int pc,int pd,int refx,int refy) {
+            *reg16(at)=std::uint16_t(pa);*reg16(at+2)=std::uint16_t(pb);
+            *reg16(at+4)=std::uint16_t(pc);*reg16(at+6)=std::uint16_t(pd);
+            *reg32(at+8)=std::uint32_t(refx);*reg32(at+12)=std::uint32_t(refy);
+        };
+        const auto chars=tiles(16);
+        // Char base 1 and map base 1 are DISPCNT bits 24-26 and 27-29, so this
+        // also checks that the 32-bit register reaches the shader unharmed.
+        video.write(0x06010000,chars);
+        video.write(0x06018000,map16);
+        *control=0x09010803u;   // display mode 1, BG mode 3, BG3 on, bases above
+        *bg3=0x5002;            // priority 2, extended map at 16, 256x256, no wrap
+        setAffine(0x04000030,0x00c0,0x0040,-0x0040,0x00c0,0x4000,0x2000);
+        const unsigned affine16=run("affine16",0);
+        // Mode 1 makes BG3 an 8-bit-map affine layer: here it wraps a doubled
+        // 128x128 map, so negative source coordinates are masked rather than
+        // dropped.
+        video.write(0x06018000,map8);
+        *control=0x09010801u;
+        *bg3=0x3001;            // priority 1, map at 16, wrap, 128x128
+        setAffine(0x04000030,0x0200,0,0,0x0200,0x0100,0x0100);
+        const unsigned affine8=run("affine8",0);
+        // Engine B: bank C at 0x06200000, its own palette block, its own matrix.
+        *bankC=0x84;
+        video.write(0x06200000,chars);
+        video.write(0x06208000,map16);
+        {
+            std::vector<std::uint8_t> palette(0x200,0);
+            const unsigned blue=0x7c00;palette[0]=std::uint8_t(blue);palette[1]=std::uint8_t(blue>>8);
+            for(unsigned i=1;i<256;++i) {
+                const unsigned c=((i*11)&31)|(((i*5)&31)<<5)|(((i*13)&31)<<10);
+                palette[i*2]=std::uint8_t(c);palette[i*2+1]=std::uint8_t(c>>8);
+            }
+            video.write(0x05000400,palette);
+        }
+        *subControl=0x00010803u;  // display mode 1, BG mode 3, BG3 on
+        *subBg3=0x7000;           // priority 0, map at 16, wrap, 256x256
+        setAffine(0x04001030,0x00a0,-0x0050,0x0050,0x00a0,0x3000,0x2800);
+        const unsigned affineSub=run("affine-sub",0,true);
         // Display mode 2: the bank itself is the picture, as a 16-bit bitmap.
-        // The write needs the bank mapped for the LCDC (mode 1), the display
-        // needs it mapped for display (mode 2), so the order matters.
+        // It has to be written while bank A is CPU-visible at 0x06000000, then
+        // handed to the LCDC (0x80) so that the display sees it. Pixel 0 is red:
+        // with every pixel black, a composition that shows nothing at all would
+        // compare equal to a broken one.
         {
             std::vector<std::uint8_t> bitmap(std::size_t(256)*192*2);
             for(unsigned i=0;i<256u*192u;++i) {
-                const unsigned colour=((i*13)&31)|(((i*5)&31)<<5)|(((i*7)&31)<<10);
+                const unsigned colour=i==0?0x001fu:(((i*13)&31)|(((i*5)&31)<<5)|(((i*7)&31)<<10));
                 bitmap[i*2]=std::uint8_t(colour);bitmap[i*2+1]=std::uint8_t(colour>>8);
             }
             video.write(0x06000000,bitmap);
         }
         *control=0x00020000u;   // display mode 2, bank A
-        *bank=0x82;             // bank A mapped for display
-        const unsigned bitmapRun=run("mode2",0);
-        const bool same=blended==0&&plain==0&&bitmapRun==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u of %u differ)\n",
-            same?"ok":"FAILED",blended,plain,bitmapRun,256u*192u);
-        *control=controlBefore;*bg0=bg0Before;*hofs=hofsBefore;*vofs=vofsBefore;
-        *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;*bank=bankBefore;
+        *bankA=0x80;            // bank A mapped to the LCDC, so it is displayed
+        const unsigned bitmapDiff=run("mode2",0);
+        const bool bitmapShown=window.gpu().readScreen(false).front()==0xffff0000u;
+        const unsigned bitmapRun=bitmapShown?bitmapDiff:256u*192u;
+        const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u, affine16 %u, affine8 %u, affine-sub %u of %u differ)\n",
+            same?"ok":"FAILED",blended,plain,bitmapRun,affine16,affine8,affineSub,256u*192u);
+        *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*hofs=hofsBefore;*vofs=vofsBefore;
+        *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
+        *subControl=subControlBefore;*subBg3=subBg3Before;
+        for(unsigned i=0;i<12;++i) {
+            *reg16(0x04000030+i*2)=affineBefore[i];
+            *reg16(0x04001030+i*2)=subAffineBefore[i];
+        }
+        *bankA=bankABefore;*bankC=bankCBefore;
     } catch(const std::exception& error) {
         std::printf("selfcheck gpu compose: threw %s\n",error.what());
     }

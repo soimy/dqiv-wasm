@@ -76,13 +76,19 @@ GPU 不支持的组合（含 `mode==3`、FIFO、捕获源的特殊态）自动�
 仅已知的 1 LSB）；不支持的组合计数为 0 且落回正确。
 
 B2 的**第一段已落地**（`compose2dFragment` + `GpuRenderer::composeScreen`）：文本 BG0–3
-（4bpp/8bpp、5 种尺寸、优先级、倒置位）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、BLDY、
-主亮度；由 `?gpucompose`（下一步接）选择，未覆盖的态（精灵、窗口、仿射、马赛克、扩展调色板、
-BF 模式 2–5、BG0 画 3D）一律回退 CPU。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0 of 49152 differ)`：构造一个滚动的文本 BG
-（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与 GPU 合成，两种寄存器
-配置（有/无混合+亮度）逐像素为 0 差异。过程中抓到两个真错：主引擎的 BG 调色板基址是
-`0x05000000`（不是 `0x200`，那是 OBJ 调色板），以及着色器输出把 ARGB 写成了 BGR。
+（4bpp/8bpp、5 种尺寸、优先级、倒置位）、仿射 BG2/BG3（8 位与 16 位图块地图、翻转位、
+PA–PD 矩阵、28 位参考点、溢出回绕、256 色）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、
+BLDY、主亮度；由 `?gpucompose` 选择，未覆盖的态（精灵、窗口、马赛克、扩展调色板、
+BF 模式 6–7、仿射位图、BG0 画 3D）一律回退 CPU。
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0, affine16 0, affine8 0, affine-sub 0 of 49152 differ)`：
+构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
+GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
+翻转、回绕与两个引擎，各自也是 0 差异。
+过程中抓到的真错：主引擎的 BG 调色板基址是 `0x05000000`（不是 `0x200`，那是 OBJ 调色板）；
+着色器输出把 ARGB 写成了 BGR；DISPCNT 的 bit 24–29（字符/地图扩展基址）用 float 传会丢位，
+改成低 24 位 + 顶字节分两段上传；引擎 B 的 BG 从 `0x06200000` 起读、四个 128 KB 窗口彼此
+相隔 2 MB，而 `vramWindowBases` 原来从 `0x06000000` 起每 128 KB 枚举一档——窗口 1–3
+永远是「未映射」，子引擎的合成只会读到 VRAM 0。
 
 **先量了一遍 DQ4 自己用什么**（`?gpucompose=probe`，标题画面 120 帧）：
 
@@ -112,8 +118,14 @@ frame 15690  r3d-prepare 3017  render3D 6023  display-compose 2800  display-read
 所以路线要改成：**主屏那条路整条重写**，而不是把 `Display::engine` 一行行搬过去。
 
 - **B2c（新，最高优先）显示模式 2 + 仿射 BG + 精灵**：显示模式 2 已完成（`2d8c66d`，
-  自检 `mode2 0 of 49152 differ`）；剩下仿射 BG 与精灵。把 GPU 合成的覆盖面补到游戏真正用的组合；
-  另有 131 帧是 BG 模式 3 + 精灵，落在仿射/精灵这两块里。
+  自检 `mode2 0 of 49152 differ`；这一段的测试原来把 bank 交回 CPU 可见（0x82）而不是交给
+  LCDC，两边都读不到图、黑对黑也能过——现在写完后把 bank A 置 0x80，且位图第一点故意写成
+  红色，读回必须真是红的，测试不能再空转）；仿射 BG 也已完成（两种地图宽度、两个引擎，自检
+  `affine16 / affine8 / affine-sub 0 of 49152 differ`）。剩下精灵。把 GPU 合成的覆盖面补到
+  游戏真正用的组合；另有 131 帧是 BG 模式 3 + 精灵，落在精灵这一块里。
+  做完仿射后，城镇子引擎那 2389 帧的拒绝理由应当从 `[affine background N]` 变成 `ok`
+  （带精灵的 131 帧仍会落 `[sprites N]`，直到精灵做完）——下一次真机 `?gpucompose=probe`
+  要确认这一点；本机没有 ROM，这里只有自检数据。
 - **B2d 主屏直通**：主引擎是 mode 2 时，画面就是 3D 帧本身——直接采样 3D 目标（捕获之后则采样
   捕获纹理），`dr`/`dc`/`display-capture`/`readNative` 整条不再需要。
 - **B4 捕获上 GPU**：捕获 = 把 3D/画布纹理 blit 进捕获纹理；只有 CPU 真去读那段 VRAM

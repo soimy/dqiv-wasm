@@ -118,7 +118,8 @@ public:
     // Stage B2 of the same plan: one screen's 2D layers composed on the GPU.
     // Returns false, with a reason, when the engine's state is not handled
     // there yet and the caller has to keep the CPU composition. So far: text
-    // backgrounds, no sprites, windows, mosaic, extended palettes or affine.
+    // and affine tilemap backgrounds (either map width, either engine); no
+    // sprites, windows, mosaic, extended palettes or affine bitmaps.
     bool composeScreen(NitroVideo&,bool sub,std::string& why);
     // The same test without drawing: what a frame would need that the GPU path
     // does not have yet (empty when it can take the frame).

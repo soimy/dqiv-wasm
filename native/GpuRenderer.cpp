@@ -398,10 +398,18 @@ uniform vec4 uBgCnt[4];       // BGxCNT
 uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
 uniform vec4 uWinBase;        // physical offset of each 128 KB VRAM window, -1 unmapped
 uniform vec4 uWinSize;        // its length
-uniform vec4 uScreen;         // backdrop colour (15-bit), DISPCNT, BLDCNT, BLDALPHA
+uniform vec4 uScreen;         // backdrop colour (15-bit), DISPCNT low 24 bits, BLDCNT, BLDALPHA
 uniform vec4 uEffects;        // BLDY, MASTER_BRIGHT, palette base, -
-uniform vec4 uMode;           // display mode, LCDC-mapped bank mask, -, -
+uniform vec4 uMode;           // display mode, LCDC-mapped bank mask, DISPCNT bits 24-31, engine (0 main, 1 sub)
+uniform vec4 uBgParam[2];     // BG2/BG3 PA,PB,PC,PD
+uniform vec4 uBgRef[2];       // BG2/BG3 reference point: x low 16 bits, x high, y low, y high
 const int kBase=0x06000000;
+// The full DISPCNT: the low 24 bits come from uScreen, the top byte from uMode
+// (a float cannot hold all 32 bits of the register exactly).
+uint displayControl() {return uint(int(uScreen.y))|(uint(int(uMode.z))<<24);}
+// Engine B's backgrounds are read through the 0x06200000 window, as
+// Display::engine reads them (engine A starts at 0x06000000).
+int vramBase() {return kBase+(int(uMode.w)!=0?0x200000:0);}
 uint vram8(int address) {
     int window=(address>>17)&3;
     int within=address&0x1ffff;
@@ -437,23 +445,67 @@ uint brightness(uint c,int mode,int amount) {
     if(mode!=1&&mode!=2)return c;
     return mode==1?blend(c,0xffffffffu,16-amount,amount,4):blend(c,0xff000000u,16-amount,amount,4);
 }
-// A text background's pixel, or 0 where it is transparent.
+// The kind of background Display::background lays down for a layer: 0=text,
+// 1=8-bit affine tilemap, 2=extended affine tilemap, 3=large bitmap.
+int bgType(int bg,int mode) {
+    if(bg<2)return 0;
+    if(mode==6)return 3;
+    if(bg==3)return mode>=3?2:(mode!=0?1:0);
+    return mode==5?2:((mode==2||mode==4)?1:0);
+}
+// A background's pixel, or 0 where it is transparent. Text and affine tile
+// maps: the bitmap affine kinds (Display's type 3, and type 2 with BGxCNT bit
+// 7) are still refused by composeSupported.
 uint bgPixel(int bg,int x,int y) {
+    uint control=displayControl();
+    int mode=int(control&7u),base=vramBase();
     int cnt=int(uBgCnt[bg].x);
     int charBase=((cnt>>2)&15)*0x4000;
     int screenBase=((cnt>>8)&31)*0x800;
-    bool eight=((cnt>>7)&1)!=0;
+    // Only the main engine has the extra 64 KB bases above its 128 KB window.
+    if(int(uMode.w)==0) {
+        charBase+=int((control>>24)&7u)*0x10000;
+        screenBase+=int((control>>27)&7u)*0x10000;
+    }
     int size=(cnt>>14)&3;
+    int type=bgType(bg,mode);
+    if(type!=0) {
+        // The affine matrix projects each screen pixel into the map. Tiles are
+        // always 256 colours here; the map holds one byte per tile (type 1) or
+        // a 16-bit entry with flip bits (type 2). BGxCNT bit 13 is the overflow
+        // wrap bit for these.
+        int dim=128<<size;
+        int pa=int(uBgParam[bg-2].x),pb=int(uBgParam[bg-2].y);
+        int pc=int(uBgParam[bg-2].z),pd=int(uBgParam[bg-2].w);
+        int refx=int(uBgRef[bg-2].x)+(int(uBgRef[bg-2].y)<<16);
+        int refy=int(uBgRef[bg-2].z)+(int(uBgRef[bg-2].w)<<16);
+        int sx=(refx+x*pa+y*pb)>>8,sy=(refy+x*pc+y*pd)>>8;
+        if((cnt&0x2000)==0&&(sx<0||sy<0||sx>=dim||sy>=dim))return 0u;
+        sx&=dim-1;sy&=dim-1;
+        int tx=sx&7,ty=sy&7;
+        int tile;
+        if(type==1) tile=int(vram8(base+screenBase+(sy>>3)*(dim>>3)+(sx>>3)));
+        else {
+            uint entry=vram16(base+screenBase+((sy>>3)*(dim>>3)+(sx>>3))*2);
+            tile=int(entry&1023u);
+            if((entry&0x400u)!=0u)tx=7-tx;
+            if((entry&0x800u)!=0u)ty=7-ty;
+        }
+        uint index=vram8(base+charBase+tile*64+ty*8+tx);
+        if(index==0u)return 0u;
+        return rgb15(paletteEntry(int(uEffects.z)+int(index)));
+    }
     int w=(size&1)!=0?512:256,h=(size&2)!=0?512:256;
     int hofs=int(uBgOff[bg].x),vofs=int(uBgOff[bg].y);
     int sx=(x+hofs)&(w-1),sy=(y+vofs)&(h-1);
-    uint entry=vram16(kBase+screenBase+(((sy>>3)*(w>>3))+(sx>>3))*2);
+    uint entry=vram16(base+screenBase+(((sy>>3)*(w>>3))+(sx>>3))*2);
     int tile=int(entry&1023u),bank=int((entry>>12)&15u);
     int px=sx&7,py=sy&7;
     uint index;
-    if(eight) index=vram8(kBase+charBase+tile*64+py*8+px);
+    bool eight=((cnt>>7)&1)!=0;
+    if(eight) index=vram8(base+charBase+tile*64+py*8+px);
     else {
-        uint packed=vram8(kBase+charBase+tile*32+py*4+(px>>1));
+        uint packed=vram8(base+charBase+tile*32+py*4+(px>>1));
         index=((px&1)!=0)?(packed>>4):(packed&15u);
     }
     if(index==0u)return 0u;
@@ -462,12 +514,13 @@ uint bgPixel(int bg,int x,int y) {
 }
 void main() {
     ivec2 p=ivec2(int(vPosition.x*256.0),191-int(vPosition.y*192.0));
-    int control=int(uScreen.y),bldcnt=int(uScreen.z),bldalpha=int(uScreen.w);
+    uint control=displayControl();
+    int bldcnt=int(uScreen.z),bldalpha=int(uScreen.w);
     uint backdrop=rgb15(uint(int(uScreen.x)));
     uint colour[5];int key[5];
     for(int i=0;i<5;++i){colour[i]=0u;key[i]=99;}
     for(int bg=0;bg<4;++bg) {
-        if((control&(0x100<<bg))==0)continue;
+        if((control&(0x100u<<uint(bg)))==0u)continue;
         uint c=bgPixel(bg,p.x,p.y);
         if(c==0u)continue;
         colour[bg]=c;key[bg]=(int(uBgCnt[bg].x)&3)*5+bg+1;
@@ -490,7 +543,7 @@ void main() {
     // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
     // and none of the layers above are drawn at all.
     if(int(uMode.x)==2) {
-        int bank=(control>>18)&3;
+        int bank=int((control>>18)&3u);
         if(((int(uMode.y)>>bank)&1)==0)c=0xff000000u;
         else {
             int at=(bank<<17)+(p.y*256+p.x)*2;
@@ -1361,14 +1414,19 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) 
     // Display mode 2 shows a VRAM bank outright: no layers, so nothing else to check.
     if(displayMode==2)return true;
     const unsigned mode=control&7;
-    if(mode>1) {why="background mode "+std::to_string(mode);return false;}
+    if(mode>5) {why="background mode "+std::to_string(mode);return false;}
     if(control&0x1000) {why="sprites";return false;}
     if(control&0xe000) {why="windows";return false;}
     if(control&(1u<<30)) {why="extended palettes";return false;}
     if(!sub&&(control&8)) {why="BG0 draws 3D";return false;}
     for(unsigned bg=0;bg<4;++bg)if(control&(0x100<<bg)) {
         const unsigned cnt=reg16(base+8+bg*2);
-        if((cnt&0x2000)||(mode==1&&bg==3)) {why="affine background";return false;}
+        // Affine backgrounds are tile maps here: the 8-bit map of modes 1/2/4
+        // and the 16-bit one of modes 3/4/5. The two bitmap kinds - the large
+        // bitmap of mode 6 and BGxCNT bit 7 on an extended affine layer - are
+        // not (and DQIV's own frames do not set them).
+        const unsigned type=bg==3?(mode>=3?2:(mode?1:0)):bg==2?(mode==5?2:(mode==2||mode==4?1:0)):0;
+        if(type==2&&(cnt&0x80)) {why="affine bitmap background";return false;}
         if(cnt&0x40) {why="mosaic";return false;}
     }
     return true;
@@ -1380,12 +1438,28 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
     if(!sourceVram_)uploadDisplaySources(video);
     std::array<std::uint32_t,4> windowSizes{};
-    const auto windowBases=video.vramWindowBases(windowSizes);
-    float bgCnt[16]={0},bgOff[16]={0};
+    const auto windowBases=video.vramWindowBases(sub,windowSizes);
+    float bgCnt[16]={0},bgOff[16]={0},bgParam[8]={0},bgRef[8]={0};
     for(unsigned bg=0;bg<4;++bg) {
         bgCnt[bg*4]=float(reg16(base+8+bg*2));
         bgOff[bg*4]=float(reg16(base+0x10+bg*4)&511);
         bgOff[bg*4+1]=float(reg16(base+0x12+bg*4)&511);
+    }
+    // BG2/BG3 affine matrices and reference points. The reference is exact
+    // only as two floats (it is 28-bit), so it goes up as low half + sign-
+    // extended high half and is reassembled in the shader.
+    for(unsigned layer=2;layer<4;++layer) {
+        const unsigned affine=base+0x20+(layer==3?0x10:0);
+        const int slot=int(layer-2);
+        const auto s16=[&](unsigned address) {return int(static_cast<std::int16_t>(reg16(address)));};
+        const auto s28=[&](unsigned address) {
+            return int(*static_cast<const std::uint32_t*>(video.reg(address,4))<<4)>>4;
+        };
+        bgParam[slot*4]=float(s16(affine));bgParam[slot*4+1]=float(s16(affine+2));
+        bgParam[slot*4+2]=float(s16(affine+4));bgParam[slot*4+3]=float(s16(affine+6));
+        const int refx=s28(affine+8),refy=s28(affine+12);
+        bgRef[slot*4]=float(refx&0xffff);bgRef[slot*4+1]=float(refx>>16);
+        bgRef[slot*4+2]=float(refy&0xffff);bgRef[slot*4+3]=float(refy>>16);
     }
     const float windowBase[4]={float(windowBases[0]),float(windowBases[1]),float(windowBases[2]),float(windowBases[3])};
     const float windowLength[4]={float(windowSizes[0]),float(windowSizes[1]),float(windowSizes[2]),float(windowSizes[3])};
@@ -1394,13 +1468,13 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
         return unsigned(palette[offset])|(unsigned(palette[offset+1])<<8);
     };
     // The backdrop is palette entry 0 of the engine's own palette block.
-    const float screen[4]={float(paletteWord(sub?0x400:0)),float(control),float(reg16(base+0x50)),float(reg16(base+0x52))};
+    const float screen[4]={float(paletteWord(sub?0x400:0)),float(control&0xffffffu),float(reg16(base+0x50)),float(reg16(base+0x52))};
     // Background palettes: engine A's start at 0x05000000 (entry 0), engine B's
     // at 0x05000400 (entry 0x200). Entry 0 doubles as the backdrop of each.
     const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),0};
     int bankMask=0;
     for(unsigned bank=0;bank<4;++bank)if(video.lcdcBank(bank))bankMask|=1<<bank;
-    const float displayMode[4]={float((control>>16)&(sub?1:3)),float(bankMask),0,0};
+    const float displayMode[4]={float((control>>16)&(sub?1:3)),float(bankMask),float(control>>24),float(sub?1:0)};
     resize(screens_[sub?1:0],256,192,false,false);
     gl::BindFramebuffer(GL_FRAMEBUFFER,screens_[sub?1:0].framebuffer);
     gl::Viewport(0,0,256,192);
@@ -1418,6 +1492,8 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     gl::Uniform4fv(uniform(compose2dProgram_,"uScreen"),1,screen);
     gl::Uniform4fv(uniform(compose2dProgram_,"uEffects"),1,effects);
     gl::Uniform4fv(uniform(compose2dProgram_,"uMode"),1,displayMode);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uBgParam"),2,bgParam);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uBgRef"),2,bgRef);
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindFramebuffer(GL_FRAMEBUFFER,0);
