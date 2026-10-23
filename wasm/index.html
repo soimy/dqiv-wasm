@@ -21,6 +21,11 @@
   #pick{position:absolute;left:0;top:0;padding:6px;background:rgba(0,0,0,.55);
     display:flex;gap:8px;align-items:center}
   #pick.hidden{display:none}
+  /* The escape hatch for a save: the browser can lose its storage, and a 64 KiB file
+     is the one copy the player can keep themselves. */
+  #tools{position:absolute;right:0;bottom:0;padding:6px;background:rgba(0,0,0,.55);
+    display:flex;gap:8px;font-size:12px;z-index:2}
+  #tools a{color:#8cf}
   /* pre: the profile line below RAF/game is its own line, and a collapsed
      newline is how it looked like it had never arrived. */
   #fps{position:absolute;right:0;top:0;padding:6px;background:rgba(0,0,0,.55);
@@ -30,6 +35,9 @@
 <body>
 <div id="wrap"><canvas id="canvas" tabindex="0"></canvas></div>
 <div id="log"></div>
+<div id="tools"><a href="#" id="saveout" title="download the save file">save &#8595;</a>
+  <a href="#" id="savein" title="upload a save file into this browser">save &#8593;</a>
+  <input type="file" id="savefile" accept=".sav,*" hidden></div>
 <div id="pick">
   <input type="file" id="rom" accept=".nds,*">
   <span id="romstate">pick the pack your machine built (or your own ROM) - the game reads it in place.
@@ -148,6 +156,30 @@
     romBytes=await f.arrayBuffer();start();
   });
   document.getElementById('norom').addEventListener('click',e=>{e.preventDefault();start();});
+
+  // Export and import the save file. The game keeps it at /saves/dqiv_eur.sav; the
+  // import path only writes the file, so the page asks for a reload afterwards (the
+  // game has the old bytes in memory).
+  const savePath='/saves/dqiv_eur.sav';
+  document.getElementById('saveout').addEventListener('click',e=>{
+    e.preventDefault();
+    try{
+      const bytes=FS.readFile(savePath);
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'}));
+      a.download='dqiv_eur.sav';a.click();URL.revokeObjectURL(a.href);
+    }catch(err){show('err','no save file yet: '+err);}
+  });
+  document.getElementById('savein').addEventListener('click',e=>{
+    e.preventDefault();document.getElementById('savefile').click();
+  });
+  document.getElementById('savefile').addEventListener('change',async e=>{
+    const f=e.target.files[0];if(!f)return;
+    try{
+      FS.writeFile(savePath,new Uint8Array(await f.arrayBuffer()));
+      FS.syncfs(false,function(err){show(err?'err':'log',err?'save not stored: '+err:'save imported - reload the page to use it');});
+    }catch(err){show('err','save not imported: '+err);}
+  });
 
   (async function(){
     if(location.search.includes('pick'))return;
