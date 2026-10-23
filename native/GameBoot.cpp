@@ -355,7 +355,9 @@ struct GameRun {
 };
 GameRun* gameRun=nullptr;   // the wasm loop callback needs a handle to it
 #ifdef __EMSCRIPTEN__
+pc::GameWindow* gameWindow=nullptr;   // the page's pointer events need one too
 bool savesReady=false;      // set by the page once IndexedDB has been read
+extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_pointer(int down,double x,double y) {gameWindow->setPointer(down!=0,float(x),float(y));}
 extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_savesReady() {savesReady=true;}
 // Only the browser build has a page to call this from; EMSCRIPTEN_KEEPALIVE does not
 // exist for MSVC, which is what CI builds on the other side.
@@ -418,6 +420,9 @@ int main() {
         // which is why the run above is static and why the loop is a callback.
         // 0 means use the browser's own frame timing.
         gameRun=&run;
+#ifdef __EMSCRIPTEN__
+        gameWindow=&run.window;
+#endif
         emscripten_set_main_loop([] { gameRun->step(); },0,1);
         return 0;
 #else

@@ -157,6 +157,27 @@
   });
   document.getElementById('norom').addEventListener('click',e=>{e.preventDefault();start();});
 
+  // Pointer input straight to the game. SDL's browser backend registers its mouse
+  // handlers without a target element here, so the mouse focus it insists on before it
+  // will report a button is never set and every click is dropped - verified by calling
+  // its handler directly and watching no SDL event appear. Browsers deliver touch as
+  // pointer events too, so this covers both. Coordinates are CSS pixels over the canvas,
+  // which is what the game's own mouse path expects.
+  (function(){
+    const canvas=document.getElementById('canvas');
+    let held=false;
+    const send=(down,e)=>{
+      if(!window.Module||!Module._dqiv_pointer)return;
+      const r=canvas.getBoundingClientRect();
+      Module._dqiv_pointer(down?1:0,e.clientX-r.left,e.clientY-r.top);
+    };
+    canvas.addEventListener('pointerdown',e=>{held=true;if(canvas.setPointerCapture)canvas.setPointerCapture(e.pointerId);send(true,e);e.preventDefault();});
+    canvas.addEventListener('pointermove',e=>{if(held)send(true,e);});
+    canvas.addEventListener('pointerup',e=>{held=false;send(false,e);});
+    canvas.addEventListener('pointercancel',e=>{held=false;send(false,e);});
+    canvas.addEventListener('pointerleave',e=>{if(held&&!canvas.hasPointerCapture)send(false,e);});
+  })();
+
   // Export and import the save file. The game keeps it at /saves/dqiv_eur.sav; the
   // import path only writes the file, so the page asks for a reload afterwards (the
   // game has the old bytes in memory).

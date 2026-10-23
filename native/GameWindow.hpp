@@ -16,6 +16,12 @@ class AudioOutput;
 // PC interface (settings screen, frame counter).
 class GameWindow {
 public:
+    // Pointer input as the page sees it (CSS pixels over the canvas). SDL's browser
+    // backend registers its mouse handlers without a target element here, so the mouse
+    // focus it needs before it will report a button never gets set and every click is
+    // dropped; the page hands the pointer over instead. This also covers touch, since
+    // browsers deliver that as pointer events too.
+    void setPointer(bool down,float x,float y) {pointerSeen_=true;pointerDown_=down;pointerX_=x;pointerY_=y;}
     GameWindow(bool hidden,bool mute);
     ~GameWindow();
     bool poll();
@@ -35,6 +41,8 @@ public:
     // Applies gameSettings() to the window, the renderer and the audio.
     void applySettings();
 private:
+    bool pointerSeen_=false,pointerDown_=false;
+    float pointerX_=0,pointerY_=0;
     SDL_Window* window_=nullptr;
     void* context_=nullptr;
     SDL_Gamepad* gamepad_=nullptr;

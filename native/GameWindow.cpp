@@ -225,7 +225,8 @@ bool GameWindow::poll() {
     else if(suppressInput_) {if(buttons)buttons=0;else suppressInput_=false;partyChat=false;}
     setPartyChatRequest(partyChat&&!partyChatHeld_);partyChatHeld_=partyChat;
     // Touch: the bottom DS screen, centred at the foot of the canvas.
-    float mouseX=0,mouseY=0;const auto mouse=SDL_GetMouseState(&mouseX,&mouseY);
+    float mouseX=0,mouseY=0;unsigned mouse=SDL_GetMouseState(&mouseX,&mouseY);
+    if(pointerSeen_) {mouseX=pointerX_;mouseY=pointerY_;mouse=pointerDown_?SDL_BUTTON_LMASK:0u;}
     int width=0,height=0;require(SDL_GetWindowSize(window_,&width,&height));
     float canvasWidth=float(width),canvasHeight=float(height);
     if(!stretch_) {
@@ -240,7 +241,24 @@ bool GameWindow::poll() {
         const float cx=x+(layout_.canvasWidth-256)/2;
         x=r[2]>0?(cx-r[0])/r[2]*256:-1;y=r[3]>0?(y-r[1])/r[3]*192+192:-1;
     }
-    const bool down=focus&&(mouse&SDL_BUTTON_LMASK)&&x>=0&&x<256&&y>=192&&y<384;
+    const bool down=(focus||pointerSeen_)&&(mouse&SDL_BUTTON_LMASK)&&x>=0&&x<256&&y>=192&&y<384;
+#ifdef __EMSCRIPTEN__
+    // A click on the bottom screen did nothing in the browser, and the chain has four
+    // independent links - is the window focused, what does the mouse report, what does
+    // the layout say, and does the result land inside the bottom screen. Printed on the
+    // press edge only, because the answer is one line and this path runs every frame.
+    {
+        static bool wasDown=false;
+        const bool pressed=(mouse&SDL_BUTTON_LMASK)!=0;
+        if(pressed&&!wasDown)
+            std::printf("  touch: mouse %d,%d window %dx%d canvas %.1fx%.1f placed %d"
+                        " screens1 %.1f,%.1f,%.1fx%.1f -> x %.1f y %.1f down %d focus %d\n",
+                int(mouseX),int(mouseY),width,height,canvasWidth,canvasHeight,int(layout_.placed),
+                layout_.screens[1][0],layout_.screens[1][1],layout_.screens[1][2],layout_.screens[1][3],
+                x,y,int(down),int(focus));
+        wasDown=pressed;
+    }
+#endif
     setTouch(down,static_cast<int>(x),static_cast<int>(y)-192);
     setButtons(buttons);return running_;
 }
