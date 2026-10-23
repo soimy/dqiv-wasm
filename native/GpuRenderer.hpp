@@ -1,5 +1,6 @@
 #pragma once
 #include "GxRasterizer.hpp"
+#include "NitroVideo.hpp"
 #include "Texture.hpp"
 #include <array>
 #include <cstdint>
@@ -106,6 +107,16 @@ public:
     void readNative(std::vector<std::uint32_t>& pixels,bool immediate=false,const std::array<float,4>& source={0,0,1,1},unsigned key=0);
     // Recipes: Display::recipes() layout (3 planes of 256 x 384).
     void present(const GpuLayout&,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch);
+    // The display engine's sources as textures, for a composition that runs on
+    // the GPU (docs/porting/07-GPU-COMPOSITION.md, stage B1): physical VRAM with
+    // four rows per 4 KB block (so a block is a contiguous row range), palette
+    // RAM and OAM with one 16-bit entry per texel. Only what was written since
+    // the last call goes up; a frame that changed nothing costs a scan of 164
+    // stamps and two stamp comparisons.
+    void uploadDisplaySources(NitroVideo&);
+    unsigned vramTexture() const {return sourceVram_;}
+    unsigned paletteTexture() const {return sourcePalette_;}
+    unsigned oamTexture() const {return sourceOam_;}
     // Keeps a copy of 3D target 0 (a world picture over the whole canvas) for
     // GpuBatch::worldScreen.
     void keepWorld();
@@ -142,6 +153,9 @@ private:
     std::unordered_map<unsigned,OverlayPicture> overlays_;
     unsigned vertexArray_=0,vertexBuffer_=0,emptyArray_=0;
     unsigned recipeTextures_[4]{},sideColumns_=0;
+    unsigned sourceVram_=0,sourcePalette_=0,sourceOam_=0;
+    std::array<std::uint32_t,NitroVideo::vramBlockCount> vramSeen_{};
+    std::uint32_t paletteSeen_=0,oamSeen_=0;
     unsigned hdAtlas_=0; // HdPictures cells, upscaled and premultiplied
     Target scene_[2],native_,output_,fogged_[2],world_;
     unsigned lastSlot_=0,readBuffers_[2]{};

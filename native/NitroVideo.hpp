@@ -28,7 +28,20 @@ public:
     std::span<const std::uint8_t> physicalVram() const {return vram_;}
     std::span<const std::uint8_t> palette() const {return palette_;}
     std::span<const std::uint8_t> oam() const {return oam_;}
+    // What the display engine reads, uploaded to textures once per change when
+    // the composition runs on the GPU (docs/porting/07-GPU-COMPOSITION.md).
+    // VRAM is stamped per 4 KB block, palette RAM and OAM as wholes: a stamp
+    // equal to the one a reader last saw means "not written since". Writing
+    // is the hot path, so a stamp is one or two stores, not a comparison.
+    static constexpr std::size_t vramBlockShift=12,vramBlockSize=1u<<vramBlockShift;
+    static constexpr std::size_t vramBlockCount=(0xa4000+vramBlockSize-1)>>vramBlockShift;
+    std::span<const std::uint32_t> vramStamps() const {return vramStamps_;}
+    std::uint32_t paletteStamp() const {return paletteStamp_;}
+    std::uint32_t oamStamp() const {return oamStamp_;}
 private:
+    std::array<std::uint32_t,vramBlockCount> vramStamps_{};
+    std::uint32_t stamp_=0,paletteStamp_=0,oamStamp_=0;
+    void stampVram(std::size_t offset,std::size_t size);
     struct Mapping {std::size_t offset,size;};
     std::vector<Mapping> mappings(std::uint32_t) const;
     alignas(8) std::array<std::uint8_t,0x2000> registers_{};

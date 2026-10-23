@@ -1167,6 +1167,64 @@ void GpuRenderer::readNative(std::vector<std::uint32_t>& pixels,bool immediate,c
     }
     unpremultiplyNative(raw,pixels);
 }
+void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
+    // 1024 texels to a row, so 4 KB of VRAM is exactly four rows and a written
+    // block is a contiguous range of rows: one transfer per run of blocks.
+    constexpr int vramWidth=1024,vramHeight=int(0xa4000)/vramWidth,rowsPerBlock=int(NitroVideo::vramBlockSize)/vramWidth;
+    const std::span<const std::uint8_t> vram=video.physicalVram();
+    const std::span<const std::uint32_t> stamps=video.vramStamps();
+    if(vramWidth*vramHeight!=int(vram.size()))throw std::runtime_error("Display sources expect 656 KB of VRAM");
+    if(!sourceVram_) {
+        auto create=[&](unsigned& texture,int width,int height,unsigned internal,unsigned format,unsigned type) {
+            gl::GenTextures(1,&texture);
+            gl::BindTexture(GL_TEXTURE_2D,texture);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+            gl::TexImage2D(GL_TEXTURE_2D,0,GLint(internal),width,height,0,format,type,nullptr);
+        };
+        create(sourceVram_,vramWidth,vramHeight,GL_R8UI,GL_RED_INTEGER,GL_UNSIGNED_BYTE);
+        create(sourcePalette_,1024,1,GL_R16UI,GL_RED_INTEGER,GL_UNSIGNED_SHORT);
+        create(sourceOam_,512,1,GL_R16UI,GL_RED_INTEGER,GL_UNSIGNED_SHORT);
+        // A texture allocated without data holds anything, and an unwritten block
+        // would never be sent because its stamp already matches: the first call
+        // sends everything.
+        gl::PixelStorei(GL_UNPACK_ALIGNMENT,1);
+        gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,vramWidth,vramHeight,GL_RED_INTEGER,GL_UNSIGNED_BYTE,vram.data());
+        gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,1024,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.palette().data());
+        gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,512,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.oam().data());
+        std::copy(stamps.begin(),stamps.end(),vramSeen_.begin());
+        paletteSeen_=video.paletteStamp();oamSeen_=video.oamStamp();
+        gl::BindTexture(GL_TEXTURE_2D,0);
+        return;
+    }
+    gl::PixelStorei(GL_UNPACK_ALIGNMENT,1);
+    for(std::size_t block=0;block<stamps.size();) {
+        if(stamps[block]==vramSeen_[block]) {++block;continue;}
+        std::size_t end=block;
+        while(end+1<stamps.size()&&stamps[end+1]!=vramSeen_[end+1])++end;
+        gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,int(block)*rowsPerBlock,vramWidth,int(end-block+1)*rowsPerBlock,
+            GL_RED_INTEGER,GL_UNSIGNED_BYTE,vram.data()+block*NitroVideo::vramBlockSize);
+        for(auto b=block;b<=end;++b)vramSeen_[b]=stamps[b];
+        block=end+1;
+    }
+    if(video.paletteStamp()!=paletteSeen_) {
+        gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,1024,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.palette().data());
+        paletteSeen_=video.paletteStamp();
+    }
+    if(video.oamStamp()!=oamSeen_) {
+        gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,512,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.oam().data());
+        oamSeen_=video.oamStamp();
+    }
+    gl::BindTexture(GL_TEXTURE_2D,0);
+}
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
     constexpr std::size_t plane=std::size_t(256)*GpuLayout::recipeRows;
     if(recipes.size()!=plane*4)throw std::runtime_error("Composition recipes have an unexpected size");

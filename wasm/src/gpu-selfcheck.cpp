@@ -29,7 +29,9 @@
 #include "GxTextures.hpp"
 #include "GxRasterizer.hpp"
 #include "GlLoader.hpp"
+#include "NitroVideo.hpp"
 #include <cstdio>
+#include <exception>
 
 namespace pc {
 namespace {
@@ -164,5 +166,116 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
     const bool clip=inside>straddling&&straddling>0&&outside==0;
     std::printf("selfcheck clip: inside %u, straddling %u, outside %u -> %s\n",
         inside,straddling,outside,clip?"ok":"FAILED");
+
+    // --- compose sources ---------------------------------------------------
+    // Stage B1 of docs/porting/07-GPU-COMPOSITION.md: the display engine's inputs
+    // go up as textures, and the composition that will read them trusts one
+    // layout - 1024 texels to a row, four rows per 4 KB block of VRAM, one 16-bit
+    // entry per texel of palette RAM and OAM. A known pattern goes in through the
+    // write path the game itself uses, and the texel the shader reads has to be
+    // the byte that was written. A layout error here would surface much later as
+    // a scrambled screen, inside a stage whose own correctness is being judged,
+    // which is the worst place to find it.
+    try {
+        auto& video=activeVideo();
+        // VRAM bank A's control byte (not DISPCNT): mode 1 maps it for the LCDC
+        // at 0x06000000, which is what a write needs to go through; the game
+        // sets the same thing up itself a moment later.
+        auto* control=static_cast<std::uint8_t*>(video.reg(0x04000240,1));
+        const std::uint8_t controlBefore=*control;
+        *control=0x81u;
+        const std::array<std::uint8_t,4> head{0x11,0x22,0x33,0x44};
+        video.write(0x06000000,head);
+        // Across the end of the first block: offset 0xffc is x 1020..1023 of row
+        // 3, then x 0..3 of row 4 - two blocks, so two uploads. This is the one
+        // place the row/block arithmetic can be wrong without any other probe
+        // noticing.
+        const std::array<std::uint8_t,8> edge{0xa0,0xa1,0xa2,0xa3,0xb0,0xb1,0xb2,0xb3};
+        video.write(0x06000ffc,edge);
+        *control=controlBefore;
+        const std::array<std::uint8_t,8> entries{0x21,0x43,0x65,0x87,0xa9,0xcb,0xed,0x0f};
+        video.write(0x05000000,entries);
+        video.write(0x07000000,entries);
+        window.gpu().uploadDisplaySources(video);
+
+        auto compile=[&](unsigned type,const char* source) {
+            const unsigned shader=gl::CreateShader(type);
+            gl::ShaderSource(shader,1,&source,nullptr);gl::CompileShader(shader);
+            int ok=0;gl::GetShaderiv(shader,GL_COMPILE_STATUS,&ok);
+            if(!ok) {
+                char log[512]={0};gl::GetShaderInfoLog(shader,511,nullptr,log);
+                std::printf("selfcheck compose sources: shader %u did not compile: %s\n",type,log);
+            }
+            return shader;
+        };
+        const char* vertexSource="#version 300 es\n"
+            "void main(){vec2 p=vec2((gl_VertexID==1||gl_VertexID==3)?1.0:-1.0,(gl_VertexID<2)?-1.0:1.0);"
+            "gl_Position=vec4(p,0.0,1.0);}\n";
+        const char* fragmentSource="#version 300 es\n"
+            "precision highp float;precision highp usampler2D;\n"
+            "uniform usampler2D uVram;uniform usampler2D uPalette;uniform usampler2D uOam;\n"
+            "uniform int uWhich;uniform int uIndex;uniform float uExpect;out vec4 oColor;\n"
+            "void main(){uint got=uWhich==0?texelFetch(uVram,ivec2(uIndex&1023,uIndex>>10),0).r:"
+            "uWhich==1?texelFetch(uPalette,ivec2(uIndex,0),0).r:texelFetch(uOam,ivec2(uIndex,0),0).r;\n"
+            "oColor=got==uint(uExpect+0.5)?vec4(0.0,1.0,0.0,1.0):vec4(1.0,0.0,0.0,1.0);}\n";
+        const unsigned program=gl::CreateProgram();
+        const unsigned vertex=compile(GL_VERTEX_SHADER,vertexSource),fragment=compile(GL_FRAGMENT_SHADER,fragmentSource);
+        gl::AttachShader(program,vertex);gl::AttachShader(program,fragment);gl::LinkProgram(program);
+        {
+            int ok=0;gl::GetProgramiv(program,GL_LINK_STATUS,&ok);
+            if(!ok) {
+                char log[512]={0};gl::GetProgramInfoLog(program,511,nullptr,log);
+                std::printf("selfcheck compose sources: program did not link: %s\n",log);
+            }
+        }
+        unsigned framebuffer=0,color=0;
+        gl::GenFramebuffers(1,&framebuffer);gl::BindFramebuffer(GL_FRAMEBUFFER,framebuffer);
+        gl::GenTextures(1,&color);gl::BindTexture(GL_TEXTURE_2D,color);
+        gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+        gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+        gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+        gl::FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,color,0);
+        gl::Viewport(0,0,1,1);
+        gl::UseProgram(program);
+        // No attributes at all: the vertex shader builds its corners from
+        // gl_VertexID, so an empty array object is enough.
+        unsigned array=0;gl::GenVertexArrays(1,&array);gl::BindVertexArray(array);
+        gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,window.gpu().vramTexture());
+        gl::ActiveTexture(GL_TEXTURE1);gl::BindTexture(GL_TEXTURE_2D,window.gpu().paletteTexture());
+        gl::ActiveTexture(GL_TEXTURE2);gl::BindTexture(GL_TEXTURE_2D,window.gpu().oamTexture());
+        gl::Uniform1i(gl::GetUniformLocation(program,"uVram"),0);
+        gl::Uniform1i(gl::GetUniformLocation(program,"uPalette"),1);
+        gl::Uniform1i(gl::GetUniformLocation(program,"uOam"),2);
+        struct Probe {int which,index;unsigned expect;};
+        // VRAM block 0's head and its edges, then palette and OAM entries: a
+        // wrong layout shows up as the wrong byte at (1023,3)/(0,4).
+        // Index is x + y*1024, so the block edge is 4095 (x 1023, row 3) and
+        // 4096.. (row 4, x 0..): the arithmetic the shader and the uploader
+        // have to agree on.
+        const Probe probes[]={{0,0,0x11},{0,1,0x22},{0,4095,0xa3},{0,4096,0xb0},{0,4099,0xb3},
+            {1,0,0x4321},{1,3,0x0fed},{2,1,0x8765}};
+        bool sources=true;
+        for(const auto& probe:probes) {
+            gl::Uniform1i(gl::GetUniformLocation(program,"uWhich"),probe.which);
+            gl::Uniform1i(gl::GetUniformLocation(program,"uIndex"),probe.index);
+            gl::Uniform1f(gl::GetUniformLocation(program,"uExpect"),float(probe.expect));
+            gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
+            std::uint8_t pixel[4]={0,0,0,0};
+            gl::ReadPixels(0,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+            if(pixel[1]<200) {
+                sources=false;
+                std::printf("selfcheck compose sources: source %d index %d, want %04x, texel is not that\n",
+                    probe.which,probe.index,probe.expect);
+            }
+        }
+        gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+        gl::ActiveTexture(GL_TEXTURE0);
+        gl::DeleteFramebuffers(1,&framebuffer);gl::DeleteTextures(1,&color);gl::DeleteProgram(program);
+        gl::DeleteVertexArrays(1,&array);
+        std::printf("selfcheck compose sources: %s\n",sources?"ok":"FAILED");
+    } catch(const std::exception& error) {
+        // A check that takes the game down at boot is worse than no check.
+        std::printf("selfcheck compose sources: threw %s\n",error.what());
+    }
 }
 }

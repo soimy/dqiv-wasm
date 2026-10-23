@@ -60,8 +60,8 @@ void NitroVideo::write(std::uint32_t address,std::span<const std::uint8_t> sourc
         if(offset>target.size() || source.size()>target.size()-offset)throw std::runtime_error("Video transfer exceeds memory region");
         std::copy(source.begin(),source.end(),target.begin()+offset);
     };
-    if(address>=0x05000000 && address<0x05000800) {simple(palette_,0x05000000);return;}
-    if(address>=0x07000000 && address<0x07000800) {simple(oam_,0x07000000);return;}
+    if(address>=0x05000000 && address<0x05000800) {simple(palette_,0x05000000);paletteStamp_=++stamp_;return;}
+    if(address>=0x07000000 && address<0x07000800) {simple(oam_,0x07000000);oamStamp_=++stamp_;return;}
     std::size_t done=0;
     while(done<source.size()) {
         auto maps=mappings(address+static_cast<unsigned>(done));
@@ -69,6 +69,7 @@ void NitroVideo::write(std::uint32_t address,std::span<const std::uint8_t> sourc
         auto size=source.size()-done;for(const auto& m:maps)size=std::min(size,m.size);
         for(const auto& m:maps) {
             std::copy_n(source.data()+done,size,vram_.data()+m.offset);
+            stampVram(m.offset,size);
             // Banks A-D hold texture images and E-G texture palettes in mode 3;
             // they are usually filled while mapped to the LCDC, then remapped.
             constexpr unsigned starts[7]={0,0x20000,0x40000,0x60000,0x80000,0x90000,0x94000},ends[7]={0x20000,0x40000,0x60000,0x80000,0x90000,0x94000,0x98000};
@@ -178,12 +179,19 @@ void* NitroVideo::lcdcSource(std::uint32_t address,std::size_t size) {
     }
     return vram_.data()+offset;
 }
+void NitroVideo::stampVram(std::size_t offset,std::size_t size) {
+    if(!size)return;
+    const std::uint32_t stamp=++stamp_;
+    const auto first=offset>>vramBlockShift,last=(offset+size-1)>>vramBlockShift;
+    for(auto block=first;block<=last&&block<vramBlockCount;++block)vramStamps_[block]=stamp;
+}
 void NitroVideo::capture(unsigned bank,unsigned offset,std::span<const std::uint16_t> pixels) {
     if(!lcdcBank(bank))return;
     for(std::size_t i=0;i<pixels.size();++i) {
         const auto p=bank*0x20000+((offset+i*2)&0x1ffff);
         vram_[p]=static_cast<std::uint8_t>(pixels[i]);vram_[p+1]=static_cast<std::uint8_t>(pixels[i]>>8);
     }
+    if(!pixels.empty())stampVram(bank*0x20000+(offset&0x1ffff),(pixels.size()-1)*2+1);
     revision_=++nextRevision;
 }
 }

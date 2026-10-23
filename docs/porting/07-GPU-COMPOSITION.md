@@ -61,7 +61,10 @@ WebGPU 真正值得上的场景，是将来要做 compute（比如把 HD 图集�
 `NitroVideo` 加按 4KB 块的写脏位（现在只有 `revision_`/`textureRevision_`，粒度太粗：3D 每帧
 都在写 VRAM，粗粒度永远"脏"）。`GpuRenderer::uploadDisplaySources` 把 `bg_`/`obj_`/两套调色板
 按脏块 `TexSubImage2D` 上去（R8UI + RGBA8），无视觉变化。
-验收：同一帧下 CPU 读到的字节与纹理内容逐块相等。
+验收（已落地，`05eb10f`）：`selfcheck compose sources: ok` ——提前面的图案写进 VRAM
+（含跨 4KB 块边界的写）、调色板、OAM，再从纹理里 `texelFetch` 出来逐字节比对，走的是
+与游戏相同的写入路径；行布局（1024 texel 一行、每块四行）错一个字节就会报出来。
+写戳在 `NitroVideo::stampVram`，上传在 `GpuRenderer::uploadDisplaySources`。
 
 **B2 2D 合成着色器（3–4 天，主体）**
 一个全屏 pass 复刻 `Display::engine` 的合成子集：BG0–3（文本/仿射，4bpp/8bpp，扩展调色板）、

@@ -54,6 +54,9 @@ void FramePresenter::placePanels(float width) {
 }
 void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const GxRasterState& state,
     const GxRenderOptions& options,bool native3d) {
+    // The display engine's sources go up with this frame's state. When nothing
+    // was written since the last frame this only scans the block stamps.
+    window_.gpu().uploadDisplaySources(video);
     const bool mainTop=(*static_cast<unsigned short*>(video.reg(0x04000304,2))&0x8000)!=0;
     const unsigned control=*static_cast<unsigned*>(video.reg(0x04000000,4));
     const bool capturing=(*static_cast<unsigned*>(video.reg(0x04000064,4))&0x80000000u)!=0;

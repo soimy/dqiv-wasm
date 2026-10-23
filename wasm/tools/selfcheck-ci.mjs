@@ -26,6 +26,7 @@ const want=[
   'selfcheck clip two-in-one-call: 4888 (expect double of the single count)',
   'selfcheck clip order swapped: two-in-one-call-first 4888, single-second 2436',
   'selfcheck clip: inside 2436, straddling 1218, outside 0 -> ok',
+  'selfcheck compose sources: ok',
 ];
 
 // .json() returns a Promise, so it has to be awaited before the field is read - reading it
@@ -76,5 +77,5 @@ console.log('journal lines with selfcheck: '+journal.split('\n').filter(l=>l.inc
 for(const w of want) console.log((journal.includes(w)?'  ok    ':'  MISSING ')+w);
 for(const l of badError) console.log('  GL ERROR '+l.trim());
 if(missing.length||badError.length) {console.error('FAIL: '+(missing.length?missing.length+' answer(s) missing, ':'')+(badError.length?badError.length+' GL error(s)':''));process.exit(1)}
-console.log('PASS: every self-check answer is as measured on 2026-10-19');
+console.log('PASS: every self-check answer is as measured (2026-10-19; the compose sources 2026-10-23)');
 ws.close();process.exit(0);
