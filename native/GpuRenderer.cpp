@@ -400,6 +400,7 @@ uniform vec4 uWinBase;        // physical offset of each 128 KB VRAM window, -1 
 uniform vec4 uWinSize;        // its length
 uniform vec4 uScreen;         // backdrop colour (15-bit), DISPCNT, BLDCNT, BLDALPHA
 uniform vec4 uEffects;        // BLDY, MASTER_BRIGHT, palette base, -
+uniform vec4 uMode;           // display mode, LCDC-mapped bank mask, -, -
 const int kBase=0x06000000;
 uint vram8(int address) {
     int window=(address>>17)&3;
@@ -411,6 +412,8 @@ uint vram8(int address) {
 }
 uint vram16(int address) {return vram8(address)|(vram8(address+1)<<8);}
 uint paletteEntry(int index) {return texelFetch(uPalette,ivec2(index,0),0).r;}
+// Physical VRAM, for the display's own bitmap modes (no window mapping).
+uint vramPhysical(int offset) {return texelFetch(uVram,ivec2(offset&1023,offset>>10),0).r;}
 // BGR555 to ARGB, expanded the way Display::rgb does: (v<<3)|(v>>2).
 uint rgb15(uint c) {
     uint r=c&31u,g=(c>>5)&31u,b=(c>>10)&31u;
@@ -484,6 +487,16 @@ void main() {
     uint c=top;
     if(target1&&effect==1&&target2)c=blend(top,below,eva,evb,4);
     else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
+    // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
+    // and none of the layers above are drawn at all.
+    if(int(uMode.x)==2) {
+        int bank=(control>>18)&3;
+        if(((int(uMode.y)>>bank)&1)==0)c=0xff000000u;
+        else {
+            int at=(bank<<17)+(p.y*256+p.x)*2;
+            c=rgb15(vramPhysical(at)|(vramPhysical(at+1)<<8));
+        }
+    }
     int master=int(uEffects.y);
     c=brightness(c,(master>>14)&3,min(16,master&31));
     // c is ARGB: R in bits 16-23, B in 0-7. The target is RGBA.
@@ -1344,7 +1357,9 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) 
     if(control&128) {why="forced blank";return false;}
     // Display::engine masks the sub engine's display mode with 1, not 3.
     const unsigned displayMode=(control>>16)&(sub?1:3);
-    if(displayMode!=1) {why="display mode "+std::to_string(displayMode);return false;}
+    if(displayMode!=1&&displayMode!=2) {why="display mode "+std::to_string(displayMode);return false;}
+    // Display mode 2 shows a VRAM bank outright: no layers, so nothing else to check.
+    if(displayMode==2)return true;
     const unsigned mode=control&7;
     if(mode>1) {why="background mode "+std::to_string(mode);return false;}
     if(control&0x1000) {why="sprites";return false;}
@@ -1383,6 +1398,9 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     // Background palettes: engine A's start at 0x05000000 (entry 0), engine B's
     // at 0x05000400 (entry 0x200). Entry 0 doubles as the backdrop of each.
     const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),0};
+    int bankMask=0;
+    for(unsigned bank=0;bank<4;++bank)if(video.lcdcBank(bank))bankMask|=1<<bank;
+    const float displayMode[4]={float((control>>16)&(sub?1:3)),float(bankMask),0,0};
     resize(screens_[sub?1:0],256,192,false,false);
     gl::BindFramebuffer(GL_FRAMEBUFFER,screens_[sub?1:0].framebuffer);
     gl::Viewport(0,0,256,192);
@@ -1399,6 +1417,7 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinSize"),1,windowLength);
     gl::Uniform4fv(uniform(compose2dProgram_,"uScreen"),1,screen);
     gl::Uniform4fv(uniform(compose2dProgram_,"uEffects"),1,effects);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uMode"),1,displayMode);
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindFramebuffer(GL_FRAMEBUFFER,0);

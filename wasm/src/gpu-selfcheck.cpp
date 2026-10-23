@@ -352,9 +352,23 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             return different;
         };
         const unsigned blended=run("blend",0x2041),plain=run("plain",0);
-        const bool same=blended==0&&plain==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u of %u differ)\n",
-            same?"ok":"FAILED",blended,plain,256u*192u);
+        // Display mode 2: the bank itself is the picture, as a 16-bit bitmap.
+        // The write needs the bank mapped for the LCDC (mode 1), the display
+        // needs it mapped for display (mode 2), so the order matters.
+        {
+            std::vector<std::uint8_t> bitmap(std::size_t(256)*192*2);
+            for(unsigned i=0;i<256u*192u;++i) {
+                const unsigned colour=((i*13)&31)|(((i*5)&31)<<5)|(((i*7)&31)<<10);
+                bitmap[i*2]=std::uint8_t(colour);bitmap[i*2+1]=std::uint8_t(colour>>8);
+            }
+            video.write(0x06000000,bitmap);
+        }
+        *control=0x00020000u;   // display mode 2, bank A
+        *bank=0x82;             // bank A mapped for display
+        const unsigned bitmapRun=run("mode2",0);
+        const bool same=blended==0&&plain==0&&bitmapRun==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u of %u differ)\n",
+            same?"ok":"FAILED",blended,plain,bitmapRun,256u*192u);
         *control=controlBefore;*bg0=bg0Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;*bank=bankBefore;
     } catch(const std::exception& error) {
