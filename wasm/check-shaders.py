@@ -29,8 +29,8 @@ if len(headers)!=2:
     sys.exit(f"expected the two DQIV_GLSL_HEADER definitions in {SOURCE}, found {len(headers)}")
 ES_HEADER,DESKTOP_HEADER=[h.encode().decode("unicode_escape") for h in headers]
 matches=re.findall(r'const char\* (\w+)=DQIV_GLSL_HEADER R"\((.*?)\)";',text,re.S)
-if len(matches)!=8:
-    sys.exit(f"expected 8 shaders in {SOURCE}, found {len(matches)}")
+if len(matches)!=9:
+    sys.exit(f"expected 9 shaders in {SOURCE}, found {len(matches)}")
 
 names=[m[0] for m in matches]
 print(f"found {len(matches)} shaders: {', '.join(names)}\n")
