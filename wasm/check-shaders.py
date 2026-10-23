@@ -59,4 +59,4 @@ if failures:
     for name,profile,output in failures:
         print(f"\n{name} ({profile})\n{output.strip()}")
     sys.exit(1)
-print("\nAll 8 shaders validate as both GLSL ES 3.00 and GLSL 330 core.")
+print(f"\nAll {len(matches)} shaders validate as both GLSL ES 3.00 and GLSL 330 core.")
