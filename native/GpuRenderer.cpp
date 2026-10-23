@@ -1333,7 +1333,7 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
     }
     gl::BindTexture(GL_TEXTURE_2D,0);
 }
-bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
+bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) const {
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
@@ -1342,9 +1342,11 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     // reference the GPU path is checked against; a scene that falls back keeps
     // working exactly as before.
     if(control&128) {why="forced blank";return false;}
-    if(((control>>16)&3)!=1) {why="display mode";return false;}
+    // Display::engine masks the sub engine's display mode with 1, not 3.
+    const unsigned displayMode=(control>>16)&(sub?1:3);
+    if(displayMode!=1) {why="display mode "+std::to_string(displayMode);return false;}
     const unsigned mode=control&7;
-    if(mode>1) {why="display mode 2-5";return false;}
+    if(mode>1) {why="background mode "+std::to_string(mode);return false;}
     if(control&0x1000) {why="sprites";return false;}
     if(control&0xe000) {why="windows";return false;}
     if(control&(1u<<30)) {why="extended palettes";return false;}
@@ -1354,6 +1356,13 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
         if((cnt&0x2000)||(mode==1&&bg==3)) {why="affine background";return false;}
         if(cnt&0x40) {why="mosaic";return false;}
     }
+    return true;
+}
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
+    if(!composeSupported(video,sub,why))return false;
+    const unsigned base=0x04000000+(sub?0x1000:0);
+    const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
+    const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
     if(!sourceVram_)uploadDisplaySources(video);
     std::array<std::uint32_t,4> windowSizes{};
     const auto windowBases=video.vramWindowBases(windowSizes);

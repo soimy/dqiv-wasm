@@ -84,6 +84,18 @@ BF 模式 2–5、BG0 画 3D）一律回退 CPU。
 配置（有/无混合+亮度）逐像素为 0 差异。过程中抓到两个真错：主引擎的 BG 调色板基址是
 `0x05000000`（不是 `0x200`，那是 OBJ 调色板），以及着色器输出把 ARGB 写成了 BGR。
 
+**先量了一遍 DQ4 自己用什么**（`?gpucompose=probe`，标题画面 120 帧）：
+
+```
+compose probe: 120 frames, main ok 0 [display mode 2 119] [background mode 3 1],
+                              sub ok 0 [background mode 3 119] [sprites 1]
+```
+
+主引擎几乎全程是 **显示模式 2（VRAM 位图显示）** —— 也就是"3D 画面被捕获进 VRAM 再显示"
+那条路；子引擎全程是 **BG 模式 3（BG3 仿射）**。因此 B2 的文本 BG 只是很小的一块，
+下一段应当先做：显示模式 2（采样 VRAM 位图）、仿射 BG、精灵。这也说明 B4（捕获上 GPU）
+不是收尾项，而是主引擎画面本身。
+
 **B3 画布着色器接上（1 天）**
 `present()` 不再传 recipe；画布着色器采样 screen0/screen1 + 3D 纹理，面板/内嵌/band/HD 的
 布局逻辑保留（配方里 kind 1/2 的语义用 coverage 纹理表达）。

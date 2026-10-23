@@ -147,7 +147,8 @@
         window.Module._dqiv_savesReady();
       }
     }]};
-    const s=document.createElement('script');s.src='dqiv_wasm_game.js';document.body.appendChild(s);
+    const s=document.createElement('script');s.src='dqiv_wasm_game.js';
+    document.body.appendChild(s);
   };
   document.getElementById('rom').addEventListener('change',async e=>{
     const f=e.target.files[0];if(!f)return;

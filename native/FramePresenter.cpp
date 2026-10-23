@@ -1,6 +1,7 @@
 #include "FramePresenter.hpp"
 #include "DualScreen.hpp"
 #include "NitroVideo.hpp"
+#include "Diagnostics.hpp"
 #include "Profile.hpp"
 #include <algorithm>
 #include <cmath>
@@ -223,6 +224,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     display_.setWorldBackground(mode==Mode::menu);
     display_.setBand(mode==Mode::battle&&wideBattleFrame());
     display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
+    if(diag::composeProbe||diag::composeDiff)probeComposition(video,mainTop);
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
@@ -279,6 +281,35 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
         }
     }
     presentable_=true;
+}
+void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
+    ++probeFrames_;
+    for(unsigned engine=0;engine<2;++engine) {
+        std::string why;
+        if(window_.gpu().composeSupported(video,engine!=0,why))++probeSupported_[engine];
+        else ++probeReasons_[engine][why];
+    }
+    if(diag::composeDiff&&probeFrames_%60==0) {
+        for(unsigned engine=0;engine<2;++engine) {
+            std::string why;
+            if(!window_.gpu().composeScreen(video,engine!=0,why))continue;
+            const auto gpu=window_.gpu().readScreen(engine!=0);
+            const auto cpu=display_.pixels();
+            const std::size_t at=((engine==0)==mainTop)?0:std::size_t(256)*192;
+            unsigned different=0;
+            for(std::size_t i=0;i<std::size_t(256)*192;++i)if(gpu[i]!=cpu[at+i])++different;
+            if(different)std::printf("compose diff: engine %u frame %u, %u of 49152 differ\n",
+                engine,probeFrames_,different);
+        }
+    }
+    if(probeFrames_%120==0) {
+        std::printf("compose probe: %u frames, main ok %u",probeFrames_,probeSupported_[0]);
+        for(const auto& reason:probeReasons_[0])std::printf(" [%s %u]",reason.first.c_str(),reason.second);
+        std::printf(", sub ok %u",probeSupported_[1]);
+        for(const auto& reason:probeReasons_[1])std::printf(" [%s %u]",reason.first.c_str(),reason.second);
+        std::printf("\n");
+        std::fflush(stdout);
+    }
 }
 void FramePresenter::present() {
     ProfileScope timing("present");

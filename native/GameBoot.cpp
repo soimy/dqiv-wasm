@@ -375,6 +375,16 @@ extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
 
 int main() {
 #ifdef __EMSCRIPTEN__
+    // ?gpucompose=probe|diff (docs/porting/07-GPU-COMPOSITION.md): the switch for
+    // what the GPU composition can take in this build's frames. Read here rather
+    // than driven from the page, so it is one thing to trust instead of two.
+    {
+        const std::string query=emscripten_run_script_string("location.search");
+        if(query.find("gpucompose=diff")!=std::string::npos) {pc::diag::composeProbe=true;pc::diag::composeDiff=true;}
+        else if(query.find("gpucompose=probe")!=std::string::npos) pc::diag::composeProbe=true;
+    }
+#endif
+#ifdef __EMSCRIPTEN__
     // The save directory is an IndexedDB mount (see wasm/index.html), and its load is
     // asynchronous. The game reads the save as soon as the player continues, so wait
     // for the page to say the load finished rather than race it. The timeout is there

@@ -8,4 +8,9 @@ inline bool skipPresent = false;    // no recipe upload, no draw, no swap
 inline bool skip3D = false;         // no 3D scene render at all
 inline bool skipReadback = false;   // no glReadPixels of the 3D screen
 inline bool skipUpload = false;     // keep the last recipe planes on the GPU
+// GPU composition (docs/porting/07-GPU-COMPOSITION.md): report what the engine
+// states in this scene need, and optionally compare the two compositions on
+// real frames. Set from the page with ?gpucompose=probe / =diff.
+inline bool composeProbe = false;   // count frames the GPU path can take, by reason
+inline bool composeDiff = false;    // also compare both compositions, 1 frame in 60
 }

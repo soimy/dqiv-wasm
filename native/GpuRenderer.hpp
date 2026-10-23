@@ -120,6 +120,9 @@ public:
     // there yet and the caller has to keep the CPU composition. So far: text
     // backgrounds, no sprites, windows, mosaic, extended palettes or affine.
     bool composeScreen(NitroVideo&,bool sub,std::string& why);
+    // The same test without drawing: what a frame would need that the GPU path
+    // does not have yet (empty when it can take the frame).
+    bool composeSupported(NitroVideo&,bool sub,std::string& why) const;
     unsigned screenTexture(bool sub) const {return screens_[sub?1:0].color;}
     // The composed screen, top-down ARGB (verification only).
     std::vector<std::uint32_t> readScreen(bool sub);
