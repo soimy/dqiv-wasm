@@ -106,6 +106,13 @@ public:
     // `key` separates alternating screens, each getting its own previous frame.
     void queueNative(const std::array<float,4>& source);   // reduce this frame's 3D screen into native_
     void takeNative(std::vector<std::uint32_t>& pixels);   // read the previous frame's, before this frame's scene
+    // The reduced screen the CPU took on this frame, as a texture: the compositor
+    // can show it where display mode 2 shows its capture instead of the VRAM the
+    // capture was written into (stage B2d).
+    unsigned nativeTexture() const {return native_[nativeSlot_^1].color;}
+    // False until a whole frame has gone round, when that texture is uninitialised
+    // and the CPU's copy of the same picture is still empty.
+    bool nativePictureReady() const {return nativeFrames_>=2;}
     void readNative(std::vector<std::uint32_t>& pixels,bool immediate=false,const std::array<float,4>& source={0,0,1,1},unsigned key=0);
     // Recipes: Display::recipes() layout (3 planes of 256 x 384).
     void present(const GpuLayout&,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch);
@@ -127,7 +134,9 @@ public:
     // Display has two other states the compositor cannot see - the battle band
     // and the menu's world background - so a caller that turns either on must
     // not take this path: `display` is asked, not the registers.
-    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why);
+    // `capture`: a texture holding exactly the picture display mode 2 shows, or 0
+    // to read it from the VRAM bank the capture wrote it into.
+    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned capture=0);
     // The same test without drawing: what a frame would need that the GPU path
     // does not have yet (empty when it can take the frame).
     bool composeSupported(NitroVideo&,bool sub,const Display&,std::string& why) const;
@@ -179,10 +188,12 @@ private:
     std::array<std::uint32_t,NitroVideo::vramBlockCount> vramSeen_{};
     std::uint32_t paletteSeen_=0,oamSeen_=0;
     unsigned hdAtlas_=0; // HdPictures cells, upscaled and premultiplied
-    Target scene_[2],native_,output_,fogged_[2],world_;
+    Target scene_[2],native_[2],output_,fogged_[2],world_;
     unsigned lastSlot_=0,readBuffers_[2]{};
     bool readPending_[2]{},fogApplied_[2]{};
     bool nativeDrawn_=false;   // the 3D screen is in native_ and can be read a frame later
+    unsigned nativeSlot_=0;    // the one this frame reduced into; the other is the one the CPU took
+    unsigned nativeFrames_=0;  // how many screens have been reduced into it
     unsigned frameQueries_[4]{};
 #ifndef __EMSCRIPTEN__
     unsigned queryHead_=0,queriesPending_=0; // the GPU-time query ring, desktop only

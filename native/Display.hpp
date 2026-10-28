@@ -44,6 +44,12 @@ public:
     static bool showsBitmapBackdrop(NitroVideo&);
     // The engine's direct-colour bitmap background (2 or 3), or -1.
     static int directBitmapLayer(NitroVideo&,bool sub);
+    // Display mode 2 shows exactly the picture the capture unit wrote, and that
+    // picture was this frame's 3D screen and nothing else: the capture took the
+    // 3D source alone, made the whole screen, at the start of the bank the
+    // display is showing. A compositor can then show the 3D screen directly
+    // instead of the copy in VRAM (docs/porting/07-GPU-COMPOSITION.md, B2d).
+    bool showsThreeCapture(NitroVideo&) const;
 private:
     struct Pixel {std::uint32_t color=0;unsigned char priority=4,alpha=0;bool semi=false,three=false;};
     std::vector<std::uint8_t> bg_,obj_,bgPalette_,objPalette_;
@@ -56,6 +62,9 @@ private:
     std::array<std::vector<std::uint32_t>,4> hdTags_;
     std::vector<std::uint32_t> screens_,graphics_,main_,sub_,recipes_,mainRecipes_,subRecipes_,graphicsRecipes_;
     bool mainTop_=true,world_=false,bandOn_=false;
+    // What the capture unit wrote on the last frame (see showsThreeCapture).
+    bool capturedThree_=false,capturedWhole_=false;
+    unsigned capturedBank_=0;
     std::vector<std::uint32_t> band_;
     void engine(NitroVideo&,bool,std::span<const std::uint32_t>,std::vector<std::uint32_t>&,std::vector<std::uint32_t>&);
     // Rows y0..y1 only, so bands of rows can be built in parallel.

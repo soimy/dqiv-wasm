@@ -396,6 +396,7 @@ out vec4 oColor;
 uniform usampler2D uVram;     // physical VRAM, 1024 texels to a row
 uniform usampler2D uPalette;  // palette RAM, one 16-bit entry per texel
 uniform usampler2D uOam;      // object attribute memory, one 16-bit entry per texel
+uniform highp sampler2D uCapture; // the screen a display-mode-2 capture shows, when it is exactly that
 uniform vec4 uBgCnt[4];       // BGxCNT
 uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
 uniform vec4 uWinBase;        // background region: physical offset of each 128 KB slot, -1 unmapped
@@ -429,6 +430,25 @@ uint vramObj8(int offset) {return windowByte(uObjWinBase,uObjWinSize,offset&(int
 uint paletteEntry(int index) {return texelFetch(uPalette,ivec2(index,0),0).r;}
 // Physical VRAM, for the display's own bitmap modes (no window mapping).
 uint vramPhysical(int offset) {return texelFetch(uVram,ivec2(offset&1023,offset>>10),0).r;}
+// The readback path takes the 3D target's premultiplied colour back to straight
+// ARGB (GpuRenderer::unpremultiplyNative), reciprocal table and all, and this is
+// the same arithmetic so that the two pictures are identical pixel for pixel.
+uint straight(vec4 c) {
+    uint r=uint(c.r*255.0+0.5),g=uint(c.g*255.0+0.5),b=uint(c.b*255.0+0.5),a=uint(c.a*255.0+0.5);
+    if(a==255u)return 0xff000000u|(r<<16)|(g<<8)|b;
+    if(a==0u)return 0u;
+    uint k=(255u*65536u+a/2u)/a;
+    r=min(255u,(r*k+32768u)>>16);g=min(255u,(g*k+32768u)>>16);b=min(255u,(b*k+32768u)>>16);
+    return (a<<24)|(r<<16)|(g<<8)|b;
+}
+// Display::color15 followed by Display::rgb: five bits of each channel, expanded
+// again. The capture keeps only those five, so a picture that skipped this would
+// differ by the low bits of every channel.
+uint quantise(uint c) {
+    uint r=((c>>16)&255u)>>3,g=((c>>8)&255u)>>3,b=(c&255u)>>3;
+    r=(r<<3)|(r>>2);g=(g<<3)|(g>>2);b=(b<<3)|(b>>2);
+    return 0xff000000u|(r<<16)|(g<<8)|b;
+}
 // BGR555 to ARGB, expanded the way Display::rgb does: (v<<3)|(v>>2).
 uint rgb15(uint c) {
     uint r=c&31u,g=(c>>5)&31u,b=(c>>10)&31u;
@@ -614,11 +634,18 @@ void main() {
     // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
     // and none of the layers above are drawn at all.
     if(int(uMode.x)==2) {
-        int bank=int((control>>18)&3u);
-        if(((int(uMode.y)>>bank)&1)==0)c=0xff000000u;
-        else {
-            int at=(bank<<17)+(p.y*256+p.x)*2;
-            c=rgb15(vramPhysical(at)|(vramPhysical(at+1)<<8));
+        if(int(uEffects.w)!=0) {
+            // The bank holds nothing but this picture - the capture wrote it, whole
+            // screen, at the start of the bank - so it is sampled where it comes
+            // from instead of where it was copied to (stage B2d).
+            c=quantise(straight(texture(uCapture,vPosition)));
+        } else {
+            int bank=int((control>>18)&3u);
+            if(((int(uMode.y)>>bank)&1)==0)c=0xff000000u;
+            else {
+                int at=(bank<<17)+(p.y*256+p.x)*2;
+                c=rgb15(vramPhysical(at)|(vramPhysical(at+1)<<8));
+            }
         }
     }
     int master=int(uEffects.y);
@@ -749,7 +776,8 @@ GpuRenderer::GpuRenderer() {
 }
 GpuRenderer::~GpuRenderer() {
     for(auto& [key,texture]:textures_)gl::DeleteTextures(1,&texture.name);
-    release(scene_[0]);release(scene_[1]);release(fogged_[0]);release(fogged_[1]);release(native_);release(output_);release(world_);
+    release(scene_[0]);release(scene_[1]);release(fogged_[0]);release(fogged_[1]);release(native_[0]);release(native_[1]);
+    release(output_);release(world_);
     if(readBuffers_[0])gl::DeleteBuffers(2,readBuffers_);
     if(queryActive_)gl::EndQuery(GL_TIME_ELAPSED);
     gl::DeleteQueries(4,frameQueries_);
@@ -1343,8 +1371,13 @@ void unpremultiplyNative(const std::vector<std::uint32_t>& raw,std::vector<std::
 }
 }
 void GpuRenderer::queueNative(const std::array<float,4>& source) {
-    resize(native_,256,192,false,false);
-    gl::BindFramebuffer(GL_FRAMEBUFFER,native_.framebuffer);gl::Viewport(0,0,256,192);
+    // Two targets: the readback of the previous frame is what the CPU holds, and
+    // that is also the picture a display-mode-2 capture shows. The one just drawn
+    // must not overwrite it before the compositor has had this frame.
+    nativeSlot_^=1;
+    auto& native=native_[nativeSlot_];
+    resize(native,256,192,false,false);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,native.framebuffer);gl::Viewport(0,0,256,192);
     DQIV_TRACE("readNative bind");
     gl::UseProgram(reduceProgram_);gl::BindVertexArray(emptyArray_);
     const auto& fogged=fogged_[lastSlot_];
@@ -1356,14 +1389,16 @@ void GpuRenderer::queueNative(const std::array<float,4>& source) {
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     DQIV_TRACE("readNative draw");
     nativeDrawn_=true;   // the next frame takes it, before queuing its own scene
+    ++nativeFrames_;
 }
 void GpuRenderer::takeNative(std::vector<std::uint32_t>& pixels) {
     if(diag::skipReadback)return;
     ProfileScope timing("readNative");
     static thread_local std::vector<std::uint32_t> raw(256*192);
     if(!nativeDrawn_) {pixels.assign(256*192,0);return;}
-    resize(native_,256,192,false,false);
-    gl::BindFramebuffer(GL_FRAMEBUFFER,native_.framebuffer);
+    auto& native=native_[nativeSlot_];   // the one the previous frame reduced into
+    resize(native,256,192,false,false);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,native.framebuffer);
     gl::PixelStorei(GL_PACK_ALIGNMENT,4);
     gl::ReadPixels(0,0,256,192,kUploadFormat,GL_UNSIGNED_BYTE,raw.data());
     DQIV_TRACE("readNative readpixels");
@@ -1527,7 +1562,7 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     }
     return true;
 }
-bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why) {
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned capture) {
     if(!composeSupported(video,sub,display,why))return false;
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
@@ -1571,7 +1606,11 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     const float screen[4]={float(paletteWord(sub?0x400:0)),float(control&0xffffffu),float(reg16(base+0x50)),float(reg16(base+0x52))};
     // Background palettes: engine A's start at 0x05000000 (entry 0), engine B's
     // at 0x05000400 (entry 0x200). Entry 0 doubles as the backdrop of each.
-    const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),0};
+    // The last component says the screen is one picture the compositor has as a
+    // texture: display mode 2 then samples that instead of the VRAM bank.
+    const bool captureShown=capture&&((control>>16)&(sub?1:3))==2;
+    const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),
+        captureShown?1.f:0.f};
     int bankMask=0;
     for(unsigned bank=0;bank<4;++bank)if(video.lcdcBank(bank))bankMask|=1<<bank;
     const float displayMode[4]={float((control>>16)&(sub?1:3)),float(bankMask),float(control>>24),float(sub?1:0)};
@@ -1584,9 +1623,11 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
     gl::ActiveTexture(GL_TEXTURE1);gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
     gl::ActiveTexture(GL_TEXTURE2);gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
+    gl::ActiveTexture(GL_TEXTURE3);gl::BindTexture(GL_TEXTURE_2D,captureShown?capture:0);
     gl::Uniform1i(uniform(compose2dProgram_,"uVram"),0);
     gl::Uniform1i(uniform(compose2dProgram_,"uPalette"),1);
     gl::Uniform1i(uniform(compose2dProgram_,"uOam"),2);
+    gl::Uniform1i(uniform(compose2dProgram_,"uCapture"),3);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgCnt"),4,bgCnt);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgOff"),4,bgOff);
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinBase"),1,windowBase);

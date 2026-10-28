@@ -284,6 +284,10 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
 }
 void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
     ++probeFrames_;
+    // Stage B2d: where the screen is nothing but this frame's captured 3D picture,
+    // the compositor can take the picture itself instead of the copy in VRAM.
+    const unsigned capture=display_.showsThreeCapture(video)&&window_.gpu().nativePictureReady()?
+        window_.gpu().nativeTexture():0;
     for(unsigned engine=0;engine<2;++engine) {
         std::string why;
         if(window_.gpu().composeSupported(video,engine!=0,display_,why))++probeSupported_[engine];
@@ -292,7 +296,7 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
     if(diag::composeDiff&&probeFrames_%60==0) {
         for(unsigned engine=0;engine<2;++engine) {
             std::string why;
-            if(!window_.gpu().composeScreen(video,engine!=0,display_,why))continue;
+            if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?capture:0))continue;
             const auto gpu=window_.gpu().readScreen(engine!=0);
             const auto cpu=display_.pixels();
             const std::size_t at=((engine==0)==mainTop)?0:std::size_t(256)*192;

@@ -80,12 +80,13 @@ B2 的**第一段已落地**（`compose2dFragment` + `GpuRenderer::composeScreen
 PA–PD 矩阵、28 位参考点、溢出回绕、256 色）、256 个文本 OBJ（两种字符映射、两个引擎、
 4bpp/8bpp、翻转、优先级、半透明）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、
 BLDY、主亮度；由 `?gpucompose` 选择，未覆盖的态（仿射/位图精灵、窗口、马赛克、扩展调色板、
-BF 模式 6–7、仿射位图、BG0 画 3D）一律回退 CPU。另有两个态根本不在寄存器里，而是 `Display`
+BF 模式 6–7、仿射位图、BG0 画 3D）一律回退 CPU；显示模式 2 还有一条直通（B2d，见下：屏幕就是
+本帧捕获的那张 3D 图时，采样图本身而不是 VRAM 里的副本）。另有两个态根本不在寄存器里，而是 `Display`
 自己的：战斗 band（`setBand`，把底屏名牌挪到屏外）和菜单的世界背景（`setWorldBackground`，
 用 3D 目标 0 顶替捕获副本）。这两条 `composeSupported` 直接问 `Display`，给的拒绝理由是
 `[battle band N]` / `[world background N]`——如果不问，探针会在战斗和菜单里把"GPU 合成
 少了 name plate / 世界图"算成 0 差异以外的东西，反而说不清。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360 of 49152 differ)`：
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360 of 49152 differ)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
 翻转、回绕与两个引擎，各自也是 0 差异。精灵三组：一屏七个对象（压过 BG 的实心 4bpp、
@@ -140,10 +141,23 @@ frame 15690  r3d-prepare 3017  render3D 6023  display-compose 2800  display-read
   出现在此列，探针会报 `[affine sprites N]` 之类的更窄理由，而不是笼统的 `[sprites N]`。
   最后一次真机 `?gpucompose=probe` 要确认的是：城镇子引擎 2389 帧从 `[affine background N]`
   变成 `ok`，带精灵的 131 帧从 `[sprites N]` 变成 `ok`；本机没有 ROM，这里只有自检数据。
-- **B2d 主屏直通**：主引擎是 mode 2 时，画面就是 3D 帧本身——直接采样 3D 目标（捕获之后则采样
-  捕获纹理），`dr`/`dc`/`display-capture`/`readNative` 整条不再需要。
+- **B2d 主屏直通（合成这一半已落地）**：主引擎是 mode 2 时，画面就是捕获进 VRAM 的那张 3D 图。
+  `composeScreen(..., capture)` 现在可以直接采样那张图（`uCapture`，一个 256×192 的纹理），
+  不再读 VRAM 里已经拷好的副本；捕获本身仍由 CPU 走到 VRAM，所以这里省掉的只是"再读回来"。
+  判定在 `Display::showsThreeCapture`：捕获必须取的是 3D 源（DISPCAPCNT bit 24）、mode 0
+  （不混）、整屏 256×192、写在 bank 开头，且显示的正是那个 bank——少一条就走 VRAM。
+  自检 `mode2 0/0`：前一个是 VRAM 那条路（原样保留，仍与 CPU 逐像素相同），后一个是直通
+  （对着已知答案，而不是对着同一帧的 CPU 结果）。为了让这个测试不可能空转，VRAM 里故意放了
+  **另一张**图：直通若没生效、或读错了来源，会差 49152 个像素而不是悄悄通过；把 `captureShown`
+  临时钉成 `false` 跑一遍，实测就是 49152。
+  这一步踩到两件事。其一，捕获在帧尾写 VRAM、下一帧才显示，所以参照必须合成两帧，
+  而 `native3d_` 本来就是"晚一帧"的（wasm 上读回只能这样，见 `takeNative` 的注释）；
+  其二，为了让合成器拿到**同一张**图，`native_` 改成两个目标轮换（`nativeSlot_`），
+  否则这一帧的 `queueNative` 会先把上一帧那张覆盖掉。采样时还要走一遍 `Display::color15`
+  的五位量化与反预乘（`unpremultiplyNative` 的倒数表原样搬进着色器），否则每个通道的低位都不同。
+  真正省掉 `readNative`/`display-capture` 还要等捕获变惰性（B4）。
 - **B4 捕获上 GPU**：捕获 = 把 3D/画布纹理 blit 进捕获纹理；只有 CPU 真去读那段 VRAM
-  （DMA、纹理上传）时才惰性读回一次。
+  （DMA、纹理上传）时才惰性读回一次。做完这一步，B2d 才能把整条 `readNative` 去掉。
 
 **B3 画布着色器接上（1 天）**
 `present()` 不再传 recipe；画布着色器采样 screen0/screen1 + 3D 纹理，面板/内嵌/band/HD 的

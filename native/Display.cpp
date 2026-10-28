@@ -368,7 +368,9 @@ bool Display::showsBitmapBackdrop(NitroVideo& video) {
         r32(video,0x04000028)==0&&r32(video,0x0400002c)==0;
 }
 void Display::capture(NitroVideo& video,std::span<const std::uint32_t> three) {
-    const unsigned cap=r32(video,0x04000064);if(!(cap&0x80000000))return;
+    const unsigned cap=r32(video,0x04000064);
+    capturedThree_=capturedWhole_=false;
+    if(!(cap&0x80000000))return;
     const unsigned control=r32(video,0x04000000),mode=(cap>>29)&3,bank=(cap>>16)&3;
     if((cap&(1<<25))&&mode)throw std::runtime_error("Capture from display FIFO is not yet implemented");
     const unsigned size=(cap>>20)&3,width=size?256:128,height=size==0?128:size==1?64:size==2?128:192;
@@ -390,6 +392,16 @@ void Display::capture(NitroVideo& video,std::span<const std::uint32_t> three) {
     }
     video.capture(bank,((cap>>18)&3)*0x8000,pixels);
     *static_cast<std::uint32_t*>(video.reg(0x04000064,4))=cap&0x7fffffff;
+    // The whole picture and nothing else: the 3D source alone, 256x192, at the
+    // very start of the bank. Anything else and the compositor has to read it.
+    capturedThree_=(cap&(1u<<24))!=0;
+    capturedWhole_=mode==0&&size==3&&((cap>>18)&3)==0;
+    capturedBank_=bank;
+}
+bool Display::showsThreeCapture(NitroVideo& video) const {
+    if(!capturedThree_||!capturedWhole_)return false;
+    const unsigned control=r32(video,0x04000000);
+    return !(control&128)&&((control>>16)&3)==2&&((control>>18)&3)==capturedBank_&&video.lcdcBank(capturedBank_);
 }
 void Display::frame(NitroVideo& video,std::span<const std::uint32_t> three,bool subEngine) {
     if(!three.empty()&&three.size()!=count)throw std::runtime_error("Display requires a 256x192 3D frame");

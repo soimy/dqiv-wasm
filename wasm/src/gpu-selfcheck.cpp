@@ -30,6 +30,7 @@
 #include "GxRasterizer.hpp"
 #include "GlLoader.hpp"
 #include "NitroVideo.hpp"
+#include "PixelOrder.hpp"
 #include "Display.hpp"
 #include <cstdio>
 #include <exception>
@@ -346,13 +347,14 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         *bldcnt=0x2041;         // BG0 first target, alpha, backdrop second
         *bldalpha=0x0808;
         *master=0x4004;         // brightness up by 4/16
-        auto run=[&](const char* label,unsigned blend,bool subEngine=false,unsigned brightness=0x4004) {
+        auto run=[&](const char* label,unsigned blend,bool subEngine=false,unsigned brightness=0x4004,
+                  std::span<const std::uint32_t> three={},unsigned capture=0) {
             *bldcnt=std::uint16_t(blend);*master=std::uint16_t(blend?brightness:0);
             window.gpu().uploadDisplaySources(video);
             Display reference;
-            reference.frame(video,{},true);
+            reference.frame(video,three,true);
             std::string why;
-            const bool composed=window.gpu().composeScreen(video,subEngine,reference,why);
+            const bool composed=window.gpu().composeScreen(video,subEngine,reference,why,capture);
             // A scene this stage refuses is a failed run, not a quiet pass: every
             // case here is one it says it handles.
             if(!composed) {
@@ -558,14 +560,91 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const unsigned bitmapDiff=run("mode2",0);
         const bool bitmapShown=window.gpu().readScreen(false).front()==0xffff0000u;
         const unsigned bitmapRun=bitmapShown?bitmapDiff:256u*192u;
+        // --- the same screen without going through VRAM (B2d) -----------------
+        // A capture that takes the 3D source alone, the whole screen, at the start
+        // of the bank the display shows leaves the screen that picture and nothing
+        // else, so the compositor can sample the picture itself instead of the copy
+        // it just made. What is in VRAM and what is in the texture are deliberately
+        // different here: if the passthrough were not taken, or read the wrong one,
+        // the pixels below would say so. Five bits a channel: the capture keeps no
+        // more, so the expected picture is quantised the same way.
+        unsigned passthroughRun=256u*192u;
+        {
+            std::vector<std::uint32_t> picture(std::size_t(256)*192),flipped(picture.size());
+            for(std::size_t i=0;i<picture.size();++i)
+                picture[i]=0xff000000u|((i*7)&255u)<<16|((i*13)&255u)<<8|((i*29)&255u);
+            picture[0]=0xffff0000u;
+            for(unsigned y=0;y<192;++y)std::copy_n(picture.data()+y*256,256,flipped.data()+std::size_t(191-y)*256);
+            unsigned captureTexture=0;
+            gl::GenTextures(1,&captureTexture);
+            gl::BindTexture(GL_TEXTURE_2D,captureTexture);
+            gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
+            gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,256,192,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            std::vector<std::uint32_t> scratch;
+            gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,192,GL_RGBA,GL_UNSIGNED_BYTE,uploadOrder(flipped,scratch));
+            gl::BindTexture(GL_TEXTURE_2D,0);
+            *bankA=0x81;                                        // CPU-visible while it is written
+            *reg32(0x04000064)=0x80000000u|(1u<<24)|(3u<<20);    // capture on: 3D source, whole screen, bank A, no offset
+            *control=0x00020000u;                               // display mode 2, bank A
+            *bankA=0x80;                                        // and bank A to the LCDC
+            // The capture lands in VRAM at the end of a frame and is shown from the
+            // next one, so one frame is composed here for its side effect alone.
+            {
+                Display priming;
+                priming.frame(video,picture,true);
+            }
+            // Then VRAM is given a different picture, both so that the two paths
+            // cannot be confused and so that the comparison below is a known answer
+            // rather than the two sides of the same frame.
+            const auto other=[](unsigned i) {
+                return i==0?0x03ffu:(((i*13)&31)|(((i*5)&31)<<5)|(((i*7)&31)<<10));
+            };
+            *bankA=0x81;
+            {
+                std::vector<std::uint8_t> bitmap(std::size_t(256)*192*2);
+                for(unsigned i=0;i<256u*192u;++i) {
+                    bitmap[std::size_t(i)*2]=std::uint8_t(other(i));
+                    bitmap[std::size_t(i)*2+1]=std::uint8_t(other(i)>>8);
+                }
+                video.write(0x06000000,bitmap);
+            }
+            *bankA=0x80;
+            *reg32(0x04000064)=0;   // nothing more is captured
+            // The VRAM path still shows that bank, and the CPU agrees.
+            const unsigned vramRun=run("mode2-vram",0);
+            // The passthrough has to show the texture's picture, not the bank's.
+            window.gpu().uploadDisplaySources(video);
+            Display reference;
+            reference.frame(video,{},true);
+            std::string why;
+            unsigned passthroughDiff=256u*192u;
+            if(window.gpu().composeScreen(video,false,reference,why,captureTexture)) {
+                const auto& gpu=window.gpu().readScreen(false);
+                const auto five=[](unsigned v) {const unsigned b=(v&255)>>3;return (b<<3)|(b>>2);};
+                passthroughDiff=0;
+                for(std::size_t i=0;i<picture.size();++i) {
+                    const auto p=picture[i];
+                    const std::uint32_t want=0xff000000u|(five(p>>16)<<16)|(five(p>>8)<<8)|five(p);
+                    if(gpu[i]!=want&&passthroughDiff++<3)
+                        std::printf("  gpu compose: mode2-capture (%zu,%zu) gpu %08x want %08x\n",i%256,i/256,gpu[i],want);
+                }
+            } else std::printf("  gpu compose: mode2-capture not composed: %s\n",why.c_str());
+            // Red at the origin: a composition that showed nothing would otherwise
+            // compare equal to a picture that is also not there.
+            const bool passthroughShown=window.gpu().readScreen(false).front()==0xffff0000u;
+            passthroughRun=(vramRun==0&&passthroughShown)?passthroughDiff:256u*192u;
+            gl::DeleteTextures(1,&captureTexture);
+        }
         // A thousand pixels is well under what the seven objects of the first
         // scene cover and well over what a composition that dropped them shows.
         const bool objectsShown=objectPixels>1000&&oneDPixels>400&&subPixels>300;
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
-            &&objSub==0&&objSubOff==0&&objectsShown;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u of %u differ)\n",
-            same?"ok":"FAILED",blended,plain,bitmapRun,affine16,affine8,affineSub,
+            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u of %u differ)\n",
+            same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
             objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,256u*192u);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
