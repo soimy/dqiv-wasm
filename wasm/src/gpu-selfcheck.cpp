@@ -346,14 +346,19 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         *bldcnt=0x2041;         // BG0 first target, alpha, backdrop second
         *bldalpha=0x0808;
         *master=0x4004;         // brightness up by 4/16
-        auto run=[&](const char* label,unsigned blend,bool subEngine=false) {
-            *bldcnt=std::uint16_t(blend);*master=std::uint16_t(blend?0x4004:0);
+        auto run=[&](const char* label,unsigned blend,bool subEngine=false,unsigned brightness=0x4004) {
+            *bldcnt=std::uint16_t(blend);*master=std::uint16_t(blend?brightness:0);
             window.gpu().uploadDisplaySources(video);
             Display reference;
             reference.frame(video,{},true);
             std::string why;
-            const bool composed=window.gpu().composeScreen(video,subEngine,why);
-            if(!composed) {std::printf("  gpu compose: %s not composed: %s\n",label,why.c_str());return 0u;}
+            const bool composed=window.gpu().composeScreen(video,subEngine,reference,why);
+            // A scene this stage refuses is a failed run, not a quiet pass: every
+            // case here is one it says it handles.
+            if(!composed) {
+                std::printf("  gpu compose: %s not composed: %s\n",label,why.c_str());
+                return 256u*192u;
+            }
             const auto gpu=window.gpu().readScreen(subEngine);
             const auto cpu=reference.pixels();
             const std::size_t at=(((subEngine?1:0)==0)==reference.mainOnTop())?0:std::size_t(256)*192;
@@ -426,6 +431,115 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         *subBg3=0x7000;           // priority 0, map at 16, wrap, 256x256
         setAffine(0x04001030,0x00a0,-0x0050,0x0050,0x00a0,0x3000,0x2800);
         const unsigned affineSub=run("affine-sub",0,true);
+        // --- sprites ----------------------------------------------------------
+        // Objects are the fifth layer and come before a background at the same
+        // priority. This scene puts a solid 4bpp object over BG1, a
+        // semi-transparent one at BG1's own priority (so the blend has to reach
+        // the layer below), one that wraps round the corner of the screen, one
+        // flipped both ways, one 8bpp 32x32 one, a later object at the first
+        // one's priority (the lower id has to win), and one with the double-size
+        // bit but no affine flag, which Display::objects skips whole.
+        std::vector<std::uint8_t> oamBefore(0x800,0);
+        video.read(0x07000000,oamBefore);
+        auto* bg1=reg16(0x0400000a);
+        const unsigned bg1Before=*bg1;
+        auto* bankB=static_cast<std::uint8_t*>(video.reg(0x04000241,1));
+        auto* bankD=static_cast<std::uint8_t*>(video.reg(0x04000243,1));
+        const std::uint8_t bankBBefore=*bankB,bankDBefore=*bankD;
+        *bankB=0x82;   // bank B at 0x06400000: the object region of engine A
+        // Sprite characters: a pattern in which zeros do occur, so transparency
+        // is real, and in which both 4bpp nibbles and 8bpp bytes are varied.
+        std::vector<std::uint8_t> chars2(0x4000,0);
+        for(std::size_t i=0;i<chars2.size();++i)chars2[i]=std::uint8_t((i*37+11)&255);
+        video.write(0x06400000,chars2);
+        // Engine A's object palette is entries 0x100..0x1ff, the sixteen banks
+        // of a 4bpp object and every colour of an 8bpp one.
+        std::vector<std::uint8_t> objPalette(0x200,0);
+        for(unsigned i=0;i<256;++i) {
+            const unsigned c=(i*7+1)&31|((i*5+3)&31)<<5|((i*3+2)&31)<<10;
+            objPalette[i*2]=std::uint8_t(c);objPalette[i*2+1]=std::uint8_t(c>>8);
+        }
+        video.write(0x05000200,objPalette);
+        // An object's three attributes: place and mode, character and flips,
+        // palette bank and priority.
+        auto sprite=[](std::vector<std::uint8_t>& oam,unsigned id,unsigned y,int x,unsigned shape,
+            unsigned size,bool eight,unsigned mode,unsigned tile,unsigned bank,unsigned priority,
+            bool hflip=false,bool vflip=false) {
+            const unsigned attributes[3]={shape<<14|(y&255)|(mode<<10)|(eight?0x2000u:0u),
+                size<<14|(hflip?0x1000u:0u)|(vflip?0x2000u:0u)|(unsigned(x)&511),
+                (bank<<12)|(priority<<10)|tile};
+            for(unsigned i=0;i<3;++i) {
+                oam[id*8+i*2]=std::uint8_t(attributes[i]&255);
+                oam[id*8+i*2+1]=std::uint8_t((attributes[i]>>8)&255);
+            }
+        };
+        std::vector<std::uint8_t> oam(0x800,0);
+        sprite(oam,0,40,32,0,1,false,0,4,3,0);
+        sprite(oam,1,40,64,0,1,false,1,6,5,1);                    // semi-transparent
+        sprite(oam,2,188,250,0,0,false,0,20,2,1);                 // wraps at the corner
+        sprite(oam,3,100,100,0,1,false,0,22,4,2,true,true);       // flipped both ways
+        sprite(oam,4,60,150,0,2,true,0,8,0,3);                    // 32x32, 256 colours
+        sprite(oam,5,0,0,0,3,false,0,0,0,0);                      // double size, no affine
+        oam[5*8+1]=0x02;                                          // ...and bit 9: skipped
+        sprite(oam,6,44,70,0,0,false,0,24,6,1);                   // loses to id 1
+        video.write(0x07000000,oam);
+        *control=0x00111200u;   // display mode 1, BG mode 0, BG1 and objects on
+        *bg1=0x0801;            // priority 1, char base 0, 4bpp, screen base 8
+        *bldalpha=0x0808;
+        // BG1 and the objects are both first and second targets, so the
+        // semi-transparent object blends and the others are left alone.
+        const unsigned objDiff=run("obj",0x1252,false,0);
+        const auto objectOn=window.gpu().readScreen(false);
+        // A scene whose objects did not draw at all would compare equal to any
+        // composition, so the same scene is composed again with the object layer
+        // off: the pixels that change are the ones the sprites cover.
+        *control=0x00110200u;   // the same, objects off
+        const unsigned objOffDiff=run("obj-off",0x1252,false,0);
+        const auto objectOff=window.gpu().readScreen(false);
+        *control=0x00111200u;
+        unsigned objectPixels=0;
+        for(std::size_t i=0;i<objectOn.size();++i)objectPixels+=objectOn[i]!=objectOff[i];
+        // The one-dimensional character map puts a sprite's tiles in a row and
+        // lifts them to the object character base of DISPCNT bits 20-21.
+        std::vector<std::uint8_t> chars1d(0x2000,0);
+        for(std::size_t i=0;i<chars1d.size();++i)chars1d[i]=std::uint8_t((i*29+7)&255);
+        video.write(0x06410000,chars1d);
+        std::vector<std::uint8_t> oam1d(0x800,0);
+        sprite(oam1d,0,40,40,0,1,false,0,2,4,0);
+        sprite(oam1d,1,40,80,0,1,true,0,16,0,1);
+        video.write(0x07000000,oam1d);
+        *control=0x00111210u;   // the same, with the 1D character map above
+        const unsigned objOneD=run("obj1d",0x1252,false,0);
+        const auto oneDOn=window.gpu().readScreen(false);
+        *control=0x00110210u;   // the same, objects off
+        const unsigned objOneDOffDiff=run("obj1d-off",0x1252,false,0);
+        const auto oneDOff=window.gpu().readScreen(false);
+        *control=0x00111210u;
+        unsigned oneDPixels=0;
+        for(std::size_t i=0;i<oneDOn.size();++i)oneDPixels+=oneDOn[i]!=oneDOff[i];
+        // Engine B reads its objects from 0x06600000, its OAM from 0x07000400
+        // and its object palette from entries 0x300..0x3ff: all three differ
+        // from engine A's and each is a constant in the shader.
+        *bankD=0x84;
+        video.write(0x06600000,chars2);
+        for(unsigned i=0;i<256;++i) {
+            const unsigned c=(i*11+5)&31|((i*13+7)&31)<<5|((i*17+9)&31)<<10;
+            objPalette[i*2]=std::uint8_t(c);objPalette[i*2+1]=std::uint8_t(c>>8);
+        }
+        video.write(0x05000600,objPalette);
+        std::vector<std::uint8_t> subOam(0x400,0);   // engine B's half of OAM
+        sprite(subOam,0,80,100,0,1,false,0,4,3,0);
+        sprite(subOam,1,86,120,0,0,true,1,6,2,1);
+        video.write(0x07000400,subOam);
+        *subControl=0x00011000u;   // display mode 1, objects on, no backgrounds
+        const unsigned objSub=run("obj-sub",0,true,0);
+        const auto subOn=window.gpu().readScreen(true);
+        *subControl=0x00010000u;   // the same, objects off
+        const unsigned objSubOff=run("obj-sub-off",0,true,0);
+        const auto subOff=window.gpu().readScreen(true);
+        *subControl=0x00011000u;
+        unsigned subPixels=0;
+        for(std::size_t i=0;i<subOn.size();++i)subPixels+=subOn[i]!=subOff[i];
         // Display mode 2: the bank itself is the picture, as a 16-bit bitmap.
         // It has to be written while bank A is CPU-visible at 0x06000000, then
         // handed to the LCDC (0x80) so that the display sees it. Pixel 0 is red:
@@ -444,17 +558,24 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const unsigned bitmapDiff=run("mode2",0);
         const bool bitmapShown=window.gpu().readScreen(false).front()==0xffff0000u;
         const unsigned bitmapRun=bitmapShown?bitmapDiff:256u*192u;
-        const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u, affine16 %u, affine8 %u, affine-sub %u of %u differ)\n",
-            same?"ok":"FAILED",blended,plain,bitmapRun,affine16,affine8,affineSub,256u*192u);
-        *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*hofs=hofsBefore;*vofs=vofsBefore;
+        // A thousand pixels is well under what the seven objects of the first
+        // scene cover and well over what a composition that dropped them shows.
+        const bool objectsShown=objectPixels>1000&&oneDPixels>400&&subPixels>300;
+        const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
+            &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
+            &&objSub==0&&objSubOff==0&&objectsShown;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u of %u differ)\n",
+            same?"ok":"FAILED",blended,plain,bitmapRun,affine16,affine8,affineSub,
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,256u*192u);
+        *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;
         for(unsigned i=0;i<12;++i) {
             *reg16(0x04000030+i*2)=affineBefore[i];
             *reg16(0x04001030+i*2)=subAffineBefore[i];
         }
-        *bankA=bankABefore;*bankC=bankCBefore;
+        video.write(0x07000000,oamBefore);
+        *bankA=bankABefore;*bankC=bankCBefore;*bankB=bankBBefore;*bankD=bankDBefore;
     } catch(const std::exception& error) {
         std::printf("selfcheck gpu compose: threw %s\n",error.what());
     }

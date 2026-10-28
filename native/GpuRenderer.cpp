@@ -1,4 +1,5 @@
 #include "GpuRenderer.hpp"
+#include "Display.hpp"
 #include "DualScreen.hpp"
 #include "HdPictures.hpp"
 #include "GlLoader.hpp"
@@ -394,31 +395,37 @@ in vec2 vPosition;
 out vec4 oColor;
 uniform usampler2D uVram;     // physical VRAM, 1024 texels to a row
 uniform usampler2D uPalette;  // palette RAM, one 16-bit entry per texel
+uniform usampler2D uOam;      // object attribute memory, one 16-bit entry per texel
 uniform vec4 uBgCnt[4];       // BGxCNT
 uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
-uniform vec4 uWinBase;        // physical offset of each 128 KB VRAM window, -1 unmapped
+uniform vec4 uWinBase;        // background region: physical offset of each 128 KB slot, -1 unmapped
 uniform vec4 uWinSize;        // its length
+uniform vec4 uObjWinBase;     // sprite region: the same, 128 KB slots
+uniform vec4 uObjWinSize;     // its length
 uniform vec4 uScreen;         // backdrop colour (15-bit), DISPCNT low 24 bits, BLDCNT, BLDALPHA
-uniform vec4 uEffects;        // BLDY, MASTER_BRIGHT, palette base, -
-uniform vec4 uMode;           // display mode, LCDC-mapped bank mask, DISPCNT bits 24-31, engine (0 main, 1 sub)
+uniform vec4 uEffects;        // BLDY, MASTER_BRIGHT, background palette base, unused
+uniform vec4 uMode;           // display mode, bank mask, DISPCNT bits 24-31, engine (0 main, 1 sub)
 uniform vec4 uBgParam[2];     // BG2/BG3 PA,PB,PC,PD
 uniform vec4 uBgRef[2];       // BG2/BG3 reference point: x low 16 bits, x high, y low, y high
-const int kBase=0x06000000;
 // The full DISPCNT: the low 24 bits come from uScreen, the top byte from uMode
 // (a float cannot hold all 32 bits of the register exactly).
 uint displayControl() {return uint(int(uScreen.y))|(uint(int(uMode.z))<<24);}
-// Engine B's backgrounds are read through the 0x06200000 window, as
-// Display::engine reads them (engine A starts at 0x06000000).
-int vramBase() {return kBase+(int(uMode.w)!=0?0x200000:0);}
-uint vram8(int address) {
-    int window=(address>>17)&3;
-    int within=address&0x1ffff;
-    int base=int(uWinBase[window]);
-    if(base<0||within>=int(uWinSize[window]))return 0u;
+// One 128 KB slot of a region: the physical base the engine sees there (-1
+// unmapped) and its length. Display::engine reads each engine's backgrounds
+// and sprites as one flat region, so the compositor does the same.
+uint windowByte(vec4 bases,vec4 sizes,int offset) {
+    int slot=offset>>17,within=offset&0x1ffff;
+    int base=int(bases[slot]);
+    if(base<0||within>=int(sizes[slot]))return 0u;
     int physical=base+within;
     return texelFetch(uVram,ivec2(physical&1023,physical>>10),0).r;
 }
-uint vram16(int address) {return vram8(address)|(vram8(address+1)<<8);}
+// The two regions an engine reads, each masked to its own length the way
+// Display::engine masks: 512 KB of backgrounds and 256 KB of sprites on engine
+// A, 128 KB of each on engine B.
+uint vram8(int offset) {return windowByte(uWinBase,uWinSize,offset&(int(uMode.w)!=0?0x1ffff:0x7ffff));}
+uint vram16(int offset) {return vram8(offset)|(vram8(offset+1)<<8);}
+uint vramObj8(int offset) {return windowByte(uObjWinBase,uObjWinSize,offset&(int(uMode.w)!=0?0x1ffff:0x3ffff));}
 uint paletteEntry(int index) {return texelFetch(uPalette,ivec2(index,0),0).r;}
 // Physical VRAM, for the display's own bitmap modes (no window mapping).
 uint vramPhysical(int offset) {return texelFetch(uVram,ivec2(offset&1023,offset>>10),0).r;}
@@ -458,7 +465,7 @@ int bgType(int bg,int mode) {
 // 7) are still refused by composeSupported.
 uint bgPixel(int bg,int x,int y) {
     uint control=displayControl();
-    int mode=int(control&7u),base=vramBase();
+    int mode=int(control&7u);
     int cnt=int(uBgCnt[bg].x);
     int charBase=((cnt>>2)&15)*0x4000;
     int screenBase=((cnt>>8)&31)*0x800;
@@ -484,33 +491,88 @@ uint bgPixel(int bg,int x,int y) {
         sx&=dim-1;sy&=dim-1;
         int tx=sx&7,ty=sy&7;
         int tile;
-        if(type==1) tile=int(vram8(base+screenBase+(sy>>3)*(dim>>3)+(sx>>3)));
+        if(type==1) tile=int(vram8(screenBase+(sy>>3)*(dim>>3)+(sx>>3)));
         else {
-            uint entry=vram16(base+screenBase+((sy>>3)*(dim>>3)+(sx>>3))*2);
+            uint entry=vram16(screenBase+((sy>>3)*(dim>>3)+(sx>>3))*2);
             tile=int(entry&1023u);
             if((entry&0x400u)!=0u)tx=7-tx;
             if((entry&0x800u)!=0u)ty=7-ty;
         }
-        uint index=vram8(base+charBase+tile*64+ty*8+tx);
+        uint index=vram8(charBase+tile*64+ty*8+tx);
         if(index==0u)return 0u;
         return rgb15(paletteEntry(int(uEffects.z)+int(index)));
     }
     int w=(size&1)!=0?512:256,h=(size&2)!=0?512:256;
     int hofs=int(uBgOff[bg].x),vofs=int(uBgOff[bg].y);
     int sx=(x+hofs)&(w-1),sy=(y+vofs)&(h-1);
-    uint entry=vram16(base+screenBase+(((sy>>3)*(w>>3))+(sx>>3))*2);
+    uint entry=vram16(screenBase+(((sy>>3)*(w>>3))+(sx>>3))*2);
     int tile=int(entry&1023u),bank=int((entry>>12)&15u);
     int px=sx&7,py=sy&7;
     uint index;
     bool eight=((cnt>>7)&1)!=0;
-    if(eight) index=vram8(base+charBase+tile*64+py*8+px);
+    if(eight) index=vram8(charBase+tile*64+py*8+px);
     else {
-        uint packed=vram8(base+charBase+tile*32+py*4+(px>>1));
+        uint packed=vram8(charBase+tile*32+py*4+(px>>1));
         index=((px&1)!=0)?(packed>>4):(packed&15u);
     }
     if(index==0u)return 0u;
     int paletteBase=int(uEffects.z);
     return rgb15(paletteEntry(paletteBase+(eight?int(index):bank*16+int(index))));
+}
+// Display::objects: the sprite layer's pixel, or 0 where no visible object
+// covers it. Objects are taken in OAM order and the lowest priority number wins,
+// a tie going to the lower id, so the scan keeps a hit only when it beats the
+// one before it. Affine (rotation/scaling), bitmap and mosaicked objects are
+// still refused by composeSupported.
+uint objPixel(int x,int y,out int priority,out int semi) {
+    // Widths and heights per shape (three of them) and size (four), in a row,
+    // as Display::objects has them.
+    const int widths[12]=int[12](8,16,32,64,16,32,32,64,8,8,16,32);
+    const int heights[12]=int[12](8,16,32,64,8,8,16,32,16,32,32,64);
+    uint control=displayControl();
+    int obase=int(uMode.w)!=0?512:0;    // engine B's OAM follows engine A's
+    bool mapped=(control&16u)!=0u;      // DISPCNT bit 4: one-dimensional character map
+    int charOffset=mapped?int((control>>20)&3u):0;
+    uint found=0u;priority=5;semi=0;
+    for(int id=0;id<128;++id) {
+        int at=obase+id*4;
+        int a=int(texelFetch(uOam,ivec2(at,0),0).r);
+        int b=int(texelFetch(uOam,ivec2(at+1,0),0).r);
+        int shape=a>>14,size=b>>14;
+        if(shape==3)continue;                       // not a sprite Display draws
+        if((a&0x100)!=0)continue;                   // affine: refused
+        if((a&0x200)!=0)continue;                   // double size without affine
+        int mode=(a>>10)&3;
+        if(mode>=2)continue;                        // OBJ window, bitmap: refused
+        int w=widths[shape*4+size],h=heights[shape*4+size];
+        // Objects wrap round the screen: their place is a byte, and the width
+        // and height are counted modulo the screen from there.
+        int dx=(x-(b&511))&511,dy=(y-(a&255))&255;
+        if(dx>=w||dy>=h)continue;
+        int u=dx,v=dy;
+        if((b&0x1000)!=0)u=w-1-u;
+        if((b&0x2000)!=0)v=h-1-v;
+        bool eight=(a&0x2000)!=0;
+        int bytes=eight?64:32;
+        // The third attribute is only needed once the pixel is covered, which
+        // most of the 128 entries are not.
+        int c=int(texelFetch(uOam,ivec2(at+2,0),0).r);
+        // The tile number is a byte offset into character memory in the 2D
+        // mapping and a tile index in the 1D one, which also steps by the base.
+        int start=(c&(eight?1022:1023))*(mapped?32<<charOffset:32);
+        int tileOffset=mapped?(v>>3)*((w>>3)*bytes)+(u>>3)*bytes:(v>>3)*1024+(u>>3)*bytes;
+        int pixel=(v&7)*8+(u&7);
+        uint index=vramObj8(start+tileOffset+(eight?pixel:pixel>>1));
+        if(!eight)index=(index>>uint((pixel&1)*4))&15u;
+        if(index==0u)continue;
+        int p=(c>>10)&3;
+        if(found!=0u&&p>=priority)continue;
+        // Extended per-object palettes are refused, so the colours come from
+        // palette RAM: entry 0x100 for engine A, 0x300 for engine B.
+        found=rgb15(paletteEntry((int(uMode.w)!=0?0x300:0x100)+int(index)+(!eight?((c>>12)&15)*16:0)));
+        priority=p;semi=mode==1?1:0;
+    }
+    return found;
 }
 void main() {
     ivec2 p=ivec2(int(vPosition.x*256.0),191-int(vPosition.y*192.0));
@@ -525,6 +587,12 @@ void main() {
         if(c==0u)continue;
         colour[bg]=c;key[bg]=(int(uBgCnt[bg].x)&3)*5+bg+1;
     }
+    // Objects are the fifth layer and, at equal priority, come before BG0..3.
+    int objPriority=5,objSemi=0;
+    if((control&0x1000u)!=0u) {
+        uint o=objPixel(p.x,p.y,objPriority,objSemi);
+        if(o!=0u) {colour[4]=o;key[4]=objPriority*5;}
+    }
     // The two highest-priority layers decide the colour, as Display::compose.
     int first=5,second=5,k1=99,k2=99;
     for(int l=0;l<5;++l) {
@@ -538,7 +606,10 @@ void main() {
     bool target2=(second==5)?((bldcnt&0x2000)!=0):((bldcnt&(0x100<<second))!=0);
     bool target1=(first==5)?((bldcnt&0x20)!=0):((bldcnt&(1<<first))!=0);
     uint c=top;
-    if(target1&&effect==1&&target2)c=blend(top,below,eva,evb,4);
+    // A semi-transparent object blends against what is behind it before the
+    // effect modes apply, and is not brightened after: Display::compose's chain.
+    if(target2&&first==4&&objSemi!=0)c=blend(top,below,eva,evb,4);
+    else if(target1&&effect==1&&target2)c=blend(top,below,eva,evb,4);
     else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
     // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
     // and none of the layers above are drawn at all.
@@ -1360,7 +1431,7 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
         };
         create(sourceVram_,vramWidth,vramHeight,GL_R8UI,GL_RED_INTEGER,GL_UNSIGNED_BYTE);
         create(sourcePalette_,1024,1,GL_R16UI,GL_RED_INTEGER,GL_UNSIGNED_SHORT);
-        create(sourceOam_,512,1,GL_R16UI,GL_RED_INTEGER,GL_UNSIGNED_SHORT);
+        create(sourceOam_,1024,1,GL_R16UI,GL_RED_INTEGER,GL_UNSIGNED_SHORT);
         // A texture allocated without data holds anything, and an unwritten block
         // would never be sent because its stamp already matches: the first call
         // sends everything.
@@ -1370,7 +1441,7 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
         gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
         gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,1024,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.palette().data());
         gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
-        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,512,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.oam().data());
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,1024,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.oam().data());
         std::copy(stamps.begin(),stamps.end(),vramSeen_.begin());
         paletteSeen_=video.paletteStamp();oamSeen_=video.oamStamp();
         gl::BindTexture(GL_TEXTURE_2D,0);
@@ -1394,12 +1465,12 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
     }
     if(video.oamStamp()!=oamSeen_) {
         gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
-        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,512,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.oam().data());
+        gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,1024,1,GL_RED_INTEGER,GL_UNSIGNED_SHORT,video.oam().data());
         oamSeen_=video.oamStamp();
     }
     gl::BindTexture(GL_TEXTURE_2D,0);
 }
-bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) const {
+bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& display,std::string& why) const {
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
@@ -1407,6 +1478,11 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) 
     // What this stage handles. Everything else stays with Display, which is the
     // reference the GPU path is checked against; a scene that falls back keeps
     // working exactly as before.
+    // Two of Display's states are not in the registers at all - the battle band
+    // (sprites outside the bottom screen) and the menu's world background - so
+    // they are asked directly.
+    if(display.bandOn()) {why="battle band";return false;}
+    if(display.worldBackground()) {why="world background";return false;}
     if(control&128) {why="forced blank";return false;}
     // Display::engine masks the sub engine's display mode with 1, not 3.
     const unsigned displayMode=(control>>16)&(sub?1:3);
@@ -1415,7 +1491,6 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) 
     if(displayMode==2)return true;
     const unsigned mode=control&7;
     if(mode>5) {why="background mode "+std::to_string(mode);return false;}
-    if(control&0x1000) {why="sprites";return false;}
     if(control&0xe000) {why="windows";return false;}
     if(control&(1u<<30)) {why="extended palettes";return false;}
     if(!sub&&(control&8)) {why="BG0 draws 3D";return false;}
@@ -1429,16 +1504,39 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,std::string& why) 
         if(type==2&&(cnt&0x80)) {why="affine bitmap background";return false;}
         if(cnt&0x40) {why="mosaic";return false;}
     }
+    // Objects are drawn as text objects only at this stage: affine
+    // (rotation/scaling) ones need the OAM parameter block, bitmap ones the
+    // object character mapping, and mosaicked ones the mosaic register. A scene
+    // with any of those stays with Display.
+    if(control&0x1000) {
+        const auto oam=video.oam();
+        const unsigned obase=sub?0x400:0;
+        const auto half=[&](unsigned offset) {
+            return unsigned(oam[offset])|(unsigned(oam[offset+1])<<8);
+        };
+        for(unsigned id=0;id<128;++id) {
+            const unsigned attributes=half(obase+id*8);
+            const bool affine=(attributes&0x100)!=0;
+            if((!affine&&(attributes&0x200))||(attributes>>14)==3)continue;
+            if(affine) {why="affine sprites";return false;}
+            const unsigned objectMode=(attributes>>10)&3;
+            if(objectMode==2)continue;   // OBJ window: skipped without the window bit
+            if(objectMode==3) {why="bitmap sprites";return false;}
+            if(attributes&0x1000) {why="sprite mosaic";return false;}
+        }
+    }
     return true;
 }
-bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
-    if(!composeSupported(video,sub,why))return false;
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why) {
+    if(!composeSupported(video,sub,display,why))return false;
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
     if(!sourceVram_)uploadDisplaySources(video);
     std::array<std::uint32_t,4> windowSizes{};
-    const auto windowBases=video.vramWindowBases(sub,windowSizes);
+    std::array<std::uint32_t,4> objectSizes{};
+    const auto windowBases=video.vramWindowBases(sub,false,windowSizes);
+    const auto objectBases=video.vramWindowBases(sub,true,objectSizes);
     float bgCnt[16]={0},bgOff[16]={0},bgParam[8]={0},bgRef[8]={0};
     for(unsigned bg=0;bg<4;++bg) {
         bgCnt[bg*4]=float(reg16(base+8+bg*2));
@@ -1463,6 +1561,8 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     }
     const float windowBase[4]={float(windowBases[0]),float(windowBases[1]),float(windowBases[2]),float(windowBases[3])};
     const float windowLength[4]={float(windowSizes[0]),float(windowSizes[1]),float(windowSizes[2]),float(windowSizes[3])};
+    const float objectBase[4]={float(objectBases[0]),float(objectBases[1]),float(objectBases[2]),float(objectBases[3])};
+    const float objectLength[4]={float(objectSizes[0]),float(objectSizes[1]),float(objectSizes[2]),float(objectSizes[3])};
     const auto palette=video.palette();
     const auto paletteWord=[&](std::size_t offset) {
         return unsigned(palette[offset])|(unsigned(palette[offset+1])<<8);
@@ -1483,12 +1583,16 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,std::string& why) {
     gl::UseProgram(compose2dProgram_);gl::BindVertexArray(emptyArray_);
     gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
     gl::ActiveTexture(GL_TEXTURE1);gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
+    gl::ActiveTexture(GL_TEXTURE2);gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
     gl::Uniform1i(uniform(compose2dProgram_,"uVram"),0);
     gl::Uniform1i(uniform(compose2dProgram_,"uPalette"),1);
+    gl::Uniform1i(uniform(compose2dProgram_,"uOam"),2);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgCnt"),4,bgCnt);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgOff"),4,bgOff);
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinBase"),1,windowBase);
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinSize"),1,windowLength);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uObjWinBase"),1,objectBase);
+    gl::Uniform4fv(uniform(compose2dProgram_,"uObjWinSize"),1,objectLength);
     gl::Uniform4fv(uniform(compose2dProgram_,"uScreen"),1,screen);
     gl::Uniform4fv(uniform(compose2dProgram_,"uEffects"),1,effects);
     gl::Uniform4fv(uniform(compose2dProgram_,"uMode"),1,displayMode);

@@ -31,12 +31,14 @@ public:
     // standing outside it, in the band around it (battleBandWidth x
     // battleBandHeight ARGB, alpha 0: none; the screen itself stays empty).
     void setBand(bool on) {bandOn_=on;}
+    bool bandOn() const {return bandOn_;}
     std::span<const std::uint32_t> band() const {return band_;}
     // The presenter keeps a picture of the world (3D target 0, the whole
     // canvas): recipes then show it where menus show their captured copy of
     // it (an untransformed direct-colour BG2 bitmap on the main engine) and
     // through the sub engine's bare backdrop.
     void setWorldBackground(bool on) {world_=on;}
+    bool worldBackground() const {return world_;}
     // The main engine shows such a copy: BG2 as a direct-colour bitmap, enabled
     // and untransformed, and BG0 not showing 3D.
     static bool showsBitmapBackdrop(NitroVideo&);

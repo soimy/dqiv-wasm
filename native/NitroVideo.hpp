@@ -36,11 +36,13 @@ public:
     static constexpr std::size_t vramBlockShift=12,vramBlockSize=1u<<vramBlockShift;
     static constexpr std::size_t vramBlockCount=(0xa4000+vramBlockSize-1)>>vramBlockShift;
     std::span<const std::uint32_t> vramStamps() const {return vramStamps_;}
-    // The display's view of the four 128 KB VRAM windows an engine reads its
-    // backgrounds through, starting at 0x06000000 (main) or 0x06200000 (sub):
-    // the physical offset each maps to (-1 when unmapped) and its length. The
-    // GPU compositor resolves a VRAM address with these.
-    std::array<std::int32_t,4> vramWindowBases(bool sub,std::array<std::uint32_t,4>& sizes) const;
+    // The display's view of an engine's VRAM as the two flat regions it reads
+    // in Display::engine: backgrounds at 0x06000000 (512 KB, engine A) or
+    // 0x06200000 (128 KB, engine B), sprites at 0x06400000 (256 KB) or
+    // 0x06600000 (128 KB). One 128 KB slot per entry: the physical offset it
+    // maps to (-1 when unmapped) and its length. The GPU compositor resolves a
+    // VRAM address with these.
+    std::array<std::int32_t,4> vramWindowBases(bool sub,bool objects,std::array<std::uint32_t,4>& sizes) const;
     std::uint32_t paletteStamp() const {return paletteStamp_;}
     std::uint32_t oamStamp() const {return oamStamp_;}
 private:

@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace pc {
+class Display;   // two of its states are not in the registers (see composeSupported)
 #ifdef __EMSCRIPTEN__
 // On, the self-check turns it on. Reports a GL error at the call that left it
 // behind, not at the end of the cycle.
@@ -118,12 +119,18 @@ public:
     // Stage B2 of the same plan: one screen's 2D layers composed on the GPU.
     // Returns false, with a reason, when the engine's state is not handled
     // there yet and the caller has to keep the CPU composition. So far: text
-    // and affine tilemap backgrounds (either map width, either engine); no
-    // sprites, windows, mosaic, extended palettes or affine bitmaps.
-    bool composeScreen(NitroVideo&,bool sub,std::string& why);
+    // and affine tilemap backgrounds (either map width, either engine) and text
+    // objects (either character mapping, either engine, both colour depths,
+    // flips, priority, semi-transparency); no affine or bitmap objects, windows,
+    // mosaic, extended palettes or affine bitmaps.
+    //
+    // Display has two other states the compositor cannot see - the battle band
+    // and the menu's world background - so a caller that turns either on must
+    // not take this path: `display` is asked, not the registers.
+    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why);
     // The same test without drawing: what a frame would need that the GPU path
     // does not have yet (empty when it can take the frame).
-    bool composeSupported(NitroVideo&,bool sub,std::string& why) const;
+    bool composeSupported(NitroVideo&,bool sub,const Display&,std::string& why) const;
     unsigned screenTexture(bool sub) const {return screens_[sub?1:0].color;}
     // The composed screen, top-down ARGB (verification only).
     std::vector<std::uint32_t> readScreen(bool sub);

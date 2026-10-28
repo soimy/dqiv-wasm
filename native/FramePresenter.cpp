@@ -286,13 +286,13 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
     ++probeFrames_;
     for(unsigned engine=0;engine<2;++engine) {
         std::string why;
-        if(window_.gpu().composeSupported(video,engine!=0,why))++probeSupported_[engine];
+        if(window_.gpu().composeSupported(video,engine!=0,display_,why))++probeSupported_[engine];
         else ++probeReasons_[engine][why];
     }
     if(diag::composeDiff&&probeFrames_%60==0) {
         for(unsigned engine=0;engine<2;++engine) {
             std::string why;
-            if(!window_.gpu().composeScreen(video,engine!=0,why))continue;
+            if(!window_.gpu().composeScreen(video,engine!=0,display_,why))continue;
             const auto gpu=window_.gpu().readScreen(engine!=0);
             const auto cpu=display_.pixels();
             const std::size_t at=((engine==0)==mainTop)?0:std::size_t(256)*192;

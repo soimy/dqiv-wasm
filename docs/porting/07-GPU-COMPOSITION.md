@@ -77,18 +77,29 @@ GPU 不支持的组合（含 `mode==3`、FIFO、捕获源的特殊态）自动�
 
 B2 的**第一段已落地**（`compose2dFragment` + `GpuRenderer::composeScreen`）：文本 BG0–3
 （4bpp/8bpp、5 种尺寸、优先级、倒置位）、仿射 BG2/BG3（8 位与 16 位图块地图、翻转位、
-PA–PD 矩阵、28 位参考点、溢出回绕、256 色）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、
-BLDY、主亮度；由 `?gpucompose` 选择，未覆盖的态（精灵、窗口、马赛克、扩展调色板、
-BF 模式 6–7、仿射位图、BG0 画 3D）一律回退 CPU。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0, affine16 0, affine8 0, affine-sub 0 of 49152 differ)`：
+PA–PD 矩阵、28 位参考点、溢出回绕、256 色）、256 个文本 OBJ（两种字符映射、两个引擎、
+4bpp/8bpp、翻转、优先级、半透明）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、
+BLDY、主亮度；由 `?gpucompose` 选择，未覆盖的态（仿射/位图精灵、窗口、马赛克、扩展调色板、
+BF 模式 6–7、仿射位图、BG0 画 3D）一律回退 CPU。另有两个态根本不在寄存器里，而是 `Display`
+自己的：战斗 band（`setBand`，把底屏名牌挪到屏外）和菜单的世界背景（`setWorldBackground`，
+用 3D 目标 0 顶替捕获副本）。这两条 `composeSupported` 直接问 `Display`，给的拒绝理由是
+`[battle band N]` / `[world background N]`——如果不问，探针会在战斗和菜单里把"GPU 合成
+少了 name plate / 世界图"算成 0 差异以外的东西，反而说不清。
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360 of 49152 differ)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
-翻转、回绕与两个引擎，各自也是 0 差异。
+翻转、回绕与两个引擎，各自也是 0 差异。精灵三组：一屏七个对象（压过 BG 的实心 4bpp、
+同优先级的半透明、跨屏角回绕、双向翻转、32×32 8bpp、被跳过的双倍尺寸位、同优先级下
+较低 id 胜出），1D 字符映射一组，子引擎一组（自己的 `0x06600000`/OAM `0x07000400`/
+调色板 `0x300`）。每组都在关掉对象层后再合成一次，两次之差必须非零——`obj 0/1827` 的前一个
+数是「与 CPU 的差异」，后一个数是「对象真的画上去了多少像素」，只有前者为 0 的测试会空转。
 过程中抓到的真错：主引擎的 BG 调色板基址是 `0x05000000`（不是 `0x200`，那是 OBJ 调色板）；
 着色器输出把 ARGB 写成了 BGR；DISPCNT 的 bit 24–29（字符/地图扩展基址）用 float 传会丢位，
 改成低 24 位 + 顶字节分两段上传；引擎 B 的 BG 从 `0x06200000` 起读、四个 128 KB 窗口彼此
 相隔 2 MB，而 `vramWindowBases` 原来从 `0x06000000` 起每 128 KB 枚举一档——窗口 1–3
-永远是「未映射」，子引擎的合成只会读到 VRAM 0。
+永远是「未映射」，子引擎的合成只会读到 VRAM 0；OAM 纹理原来只建了 512 texel（引擎 A 那一半），
+子引擎的精灵永远读不到属性——自检的 `obj-sub` 是红的才发现；精灵的 OAM 也要按
+`Display::objects` 的规则读：先看属性 0/1 判断它是否被覆盖，覆盖了才读属性 2。
 
 **先量了一遍 DQ4 自己用什么**（`?gpucompose=probe`，标题画面 120 帧）：
 
@@ -121,11 +132,14 @@ frame 15690  r3d-prepare 3017  render3D 6023  display-compose 2800  display-read
   自检 `mode2 0 of 49152 differ`；这一段的测试原来把 bank 交回 CPU 可见（0x82）而不是交给
   LCDC，两边都读不到图、黑对黑也能过——现在写完后把 bank A 置 0x80，且位图第一点故意写成
   红色，读回必须真是红的，测试不能再空转）；仿射 BG 也已完成（两种地图宽度、两个引擎，自检
-  `affine16 / affine8 / affine-sub 0 of 49152 differ`）。剩下精灵。把 GPU 合成的覆盖面补到
-  游戏真正用的组合；另有 131 帧是 BG 模式 3 + 精灵，落在精灵这一块里。
-  做完仿射后，城镇子引擎那 2389 帧的拒绝理由应当从 `[affine background N]` 变成 `ok`
-  （带精灵的 131 帧仍会落 `[sprites N]`，直到精灵做完）——下一次真机 `?gpucompose=probe`
-  要确认这一点；本机没有 ROM，这里只有自检数据。
+  `affine16 / affine8 / affine-sub 0 of 49152 differ`）；**精灵也已完成**（两种字符映射、
+  两个引擎、4bpp/8bpp、翻转、优先级、半透明，自检 `obj 0/1827, obj1d 0/554, obj-sub 0/360`）。
+  至此 B2c 的三块都齐了，GPU 合成的覆盖面已经覆盖城镇实机那 2520 帧里出现的全部组合——
+  主引擎显示模式 2 占 2389 帧、子引擎 BG 模式 3 仿射 2389 帧、带精灵 131 帧。
+  精灵这一段仍是子集：仿射（旋转缩放）精灵、位图精灵、马赛克精灵一律回退 CPU，真机上若某帧
+  出现在此列，探针会报 `[affine sprites N]` 之类的更窄理由，而不是笼统的 `[sprites N]`。
+  最后一次真机 `?gpucompose=probe` 要确认的是：城镇子引擎 2389 帧从 `[affine background N]`
+  变成 `ok`，带精灵的 131 帧从 `[sprites N]` 变成 `ok`；本机没有 ROM，这里只有自检数据。
 - **B2d 主屏直通**：主引擎是 mode 2 时，画面就是 3D 帧本身——直接采样 3D 目标（捕获之后则采样
   捕获纹理），`dr`/`dc`/`display-capture`/`readNative` 整条不再需要。
 - **B4 捕获上 GPU**：捕获 = 把 3D/画布纹理 blit 进捕获纹理；只有 CPU 真去读那段 VRAM
