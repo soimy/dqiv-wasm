@@ -167,8 +167,20 @@ frame 15690  r3d-prepare 3017  render3D 6023  display-compose 2800  display-read
   （DMA、纹理上传）时才惰性读回一次。做完这一步，B2d 才能把整条 `readNative` 去掉。
 
 **B3 画布着色器接上（1 天）**
-`present()` 不再传 recipe；画布着色器采样 screen0/screen1 + 3D 纹理，面板/内嵌/band/HD 的
-布局逻辑保留（配方里 kind 1/2 的语义用 coverage 纹理表达）。
+`present()` 不再传 recipe（每帧 4 个平面、2.9 MB 的上传随之消失）；画布着色器采样
+screen0/screen1，面板/内嵌/scale2x/HD/band 的布局逻辑保留。
+
+计划里原来写的是"用 coverage 纹理表达 kind 1/2"，**改成不做了**：只要 `compose2d` 自己也把
+"backdrop 放 3D 通过"（`Display::engine` 的 `recipe[1]` 第 3 位，配合 `layout.backdrop3D`）
+画进去，合成出来的 screen 就是完整的，画布只剩"把两张 screen 按布局摆上去 + HD 覆盖 + band"，
+不需要第二张输出、也不需要 MRT。这样少一张纹理、少一套语义，B3 从"重写画布"缩成"给画布
+加一条采样路径"。
+
+两个已知代价，写在这里而不是等着被发现：
+1. `compose2d` 能拿到的 3D 只有 256×192 的缩略图（`nativeTexture()`），而画布那条路采样的是
+   原始 3D 目标、放大会更清晰。宽屏战斗（backdrop 放 3D 通过）因此会比现在略软；如果真机
+   上看得见，再给这条单独传高分辨率纹理，而不是为此保留整套 coverage。
+2. band 仍在画布上画（`layout_.band`），不进取景合成——它本来就在屏外。
 
 **B4 捕获上 GPU（1–2 天）**
 捕获 = 从 3D/画布纹理 blit 进捕获纹理；显示它（LCDC 直读 bank 的模式 2）时采样捕获纹理。
