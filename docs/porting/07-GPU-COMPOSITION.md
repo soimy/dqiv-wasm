@@ -85,7 +85,7 @@ BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`
 没有 3D 图时才回退；显示模式 2 还有一条直通（B2d，见下：屏幕就是本帧捕获的那张 3D 图时，
 采样图本身而不是 VRAM 里的副本）。另有两个态根本不在寄存器里，而是 `Display`
 自己的：战斗 band（`setBand`，把底屏名牌挪到屏外）、菜单的世界背景（`setWorldBackground`，
-用 3D 目标 0 顶替捕获副本），以及这一帧有没有高清图（`setHdPictures`/`hd_`）。这三条
+用 3D 目标 0 顶替捕获副本），以及这一帧有没有高清图（`showsHdPictures`，即 `hd_`）。这三条
 `composeSupported` 直接问 `Display`，拒绝理由是 `[battle band N]` / `[world background N]` /
 `[hd pictures N]`。高清图那条尤其要紧：HD 的图块是在画布上盖上去的，VRAM 里仍然是旧图块，
 所以"从 VRAM 合成"会安静地画出旧图——探针逐像素比对其实看不出来（CPU 的 `pixels()` 里也
