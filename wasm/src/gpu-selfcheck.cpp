@@ -637,15 +637,58 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             passthroughRun=(vramRun==0&&passthroughShown)?passthroughDiff:256u*192u;
             gl::DeleteTextures(1,&captureTexture);
         }
+        // --- BG0 showing the 3D screen ----------------------------------------
+        // Where DISPCNT says BG0 draws 3D, the layer is the 3D picture itself: its
+        // colour, BG0's priority and scroll, and the five bits of alpha in its top
+        // byte, which blend against what is below. The texture holds the picture
+        // as the 3D target does - premultiplied - and Display gets the straight
+        // version of it, which is what the readback hands over.
+        unsigned threeRun=256u*192u;
+        {
+            std::vector<std::uint32_t> premultiplied(std::size_t(256)*192),picture(premultiplied.size()),flipped(premultiplied.size());
+            const auto straightFrom=[](std::uint32_t p) {
+                const unsigned a=p>>24;if(a==255u)return p;if(a==0u)return 0u;
+                const unsigned k=(255u*65536u+a/2u)/a;
+                const auto channel=[&](unsigned shift) {return std::min(255u,((((p>>shift)&255u)*k)+32768u)>>16);};
+                return (a<<24)|(channel(16)<<16)|(channel(8)<<8)|channel(0);
+            };
+            for(std::size_t i=0;i<premultiplied.size();++i) {
+                const unsigned a=i%3==0?0:i%3==1?128:255;
+                const unsigned r=(i*7)&255,g=(i*13)&255,b=(i*29)&255;
+                premultiplied[i]=(a<<24)|((r*a/255)<<16)|((g*a/255)<<8)|(b*a/255);
+                picture[i]=straightFrom(premultiplied[i]);
+            }
+            for(unsigned y=0;y<192;++y)std::copy_n(premultiplied.data()+y*256,256,flipped.data()+std::size_t(191-y)*256);
+            unsigned texture3d=0;
+            gl::GenTextures(1,&texture3d);
+            gl::BindTexture(GL_TEXTURE_2D,texture3d);
+            gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
+            gl::TexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,256,192,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+            gl::TexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+            std::vector<std::uint32_t> scratch;
+            gl::TexSubImage2D(GL_TEXTURE_2D,0,0,0,256,192,GL_RGBA,GL_UNSIGNED_BYTE,uploadOrder(flipped,scratch));
+            gl::BindTexture(GL_TEXTURE_2D,0);
+            *control=0x00010108u;   // display mode 1, BG mode 0, BG0 on and drawing 3D
+            *bg0=0x0001;            // priority 1
+            *hofs=7;                // scrolled right: the picture wraps where it runs out
+            const unsigned threeDiff=run("bg0-three",0x2041,false,0,picture,texture3d);
+            // Column 1 samples the picture at 8, whose alpha is 255: opaque, so the
+            // composed pixel is the picture's own colour and nothing else.
+            const bool threeShown=window.gpu().readScreen(false)[1]==(picture[8]|0xff000000u);
+            threeRun=threeShown?threeDiff:256u*192u;
+            gl::DeleteTextures(1,&texture3d);
+            *hofs=hofsBefore;
+        }
         // A thousand pixels is well under what the seven objects of the first
         // scene cover and well over what a composition that dropped them shows.
         const bool objectsShown=objectPixels>1000&&oneDPixels>400&&subPixels>300;
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
-            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u of %u differ)\n",
+            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,256u*192u);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;

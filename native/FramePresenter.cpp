@@ -290,7 +290,7 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
         window_.gpu().nativeTexture():0;
     for(unsigned engine=0;engine<2;++engine) {
         std::string why;
-        if(window_.gpu().composeSupported(video,engine!=0,display_,why))++probeSupported_[engine];
+        if(window_.gpu().composeSupported(video,engine!=0,display_,engine==0&&capture!=0,why))++probeSupported_[engine];
         else ++probeReasons_[engine][why];
     }
     if(diag::composeDiff&&probeFrames_%60==0) {

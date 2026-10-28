@@ -396,7 +396,8 @@ out vec4 oColor;
 uniform usampler2D uVram;     // physical VRAM, 1024 texels to a row
 uniform usampler2D uPalette;  // palette RAM, one 16-bit entry per texel
 uniform usampler2D uOam;      // object attribute memory, one 16-bit entry per texel
-uniform highp sampler2D uCapture; // the screen a display-mode-2 capture shows, when it is exactly that
+uniform highp sampler2D uScreen3d;   // this screen's reduced 3D picture, when the caller has one
+uniform float uThreeOn;             // BG0 is showing that picture (DISPCNT says BG0 draws 3D)
 uniform vec4 uBgCnt[4];       // BGxCNT
 uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
 uniform vec4 uWinBase;        // background region: physical offset of each 128 KB slot, -1 unmapped
@@ -601,8 +602,24 @@ void main() {
     uint backdrop=rgb15(uint(int(uScreen.x)));
     uint colour[5];int key[5];
     for(int i=0;i<5;++i){colour[i]=0u;key[i]=99;}
+    // BG0 showing the 3D screen: its colour, BG0's priority, and the five bits of
+    // alpha its top byte carries. Display::engine lays it down the same way - the
+    // picture, scrolled horizontally, with nothing where the scroll wraps past the
+    // right edge - and it is not a tilemap, so bgPixel is not asked.
+    int threeAlpha=-1;
+    if(int(uThreeOn)!=0) {
+        int sx=(p.x+int(uBgOff[0].x))&511;
+        if(sx<256) {
+            uint t=straight(texelFetch(uScreen3d,ivec2(sx,191-p.y),0));
+            if((t>>24)!=0u) {
+                colour[0]=t|0xff000000u;key[0]=(int(uBgCnt[0].x)&3)*5+1;
+                threeAlpha=int((t>>24)&255u)>>3;
+            }
+        }
+    }
     for(int bg=0;bg<4;++bg) {
         if((control&(0x100u<<uint(bg)))==0u)continue;
+        if(bg==0&&int(uMode.w)==0&&(control&8u)!=0u)continue;   // drawn above
         uint c=bgPixel(bg,p.x,p.y);
         if(c==0u)continue;
         colour[bg]=c;key[bg]=(int(uBgCnt[bg].x)&3)*5+bg+1;
@@ -626,10 +643,14 @@ void main() {
     bool target2=(second==5)?((bldcnt&0x2000)!=0):((bldcnt&(0x100<<second))!=0);
     bool target1=(first==5)?((bldcnt&0x20)!=0):((bldcnt&(1<<first))!=0);
     uint c=top;
-    // A semi-transparent object blends against what is behind it before the
-    // effect modes apply, and is not brightened after: Display::compose's chain.
-    if(target2&&first==4&&objSemi!=0)c=blend(top,below,eva,evb,4);
-    else if(target1&&effect==1&&target2)c=blend(top,below,eva,evb,4);
+    // Display::compose's chain. The 3D layer, when it is the top one, blends by
+    // its own five bits of alpha and is not brightened afterwards; a
+    // semi-transparent object blends against what is behind it next; then the
+    // effect modes.
+    int sceneAlpha=first==0?threeAlpha:-1;
+    if(target2&&sceneAlpha>=0&&sceneAlpha<31)c=blend(top,below,sceneAlpha+1,31-sceneAlpha,5);
+    else if(target2&&first==4&&objSemi!=0)c=blend(top,below,eva,evb,4);
+    else if(target1&&effect==1&&target2&&sceneAlpha<0)c=blend(top,below,eva,evb,4);
     else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
     // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
     // and none of the layers above are drawn at all.
@@ -638,7 +659,7 @@ void main() {
             // The bank holds nothing but this picture - the capture wrote it, whole
             // screen, at the start of the bank - so it is sampled where it comes
             // from instead of where it was copied to (stage B2d).
-            c=quantise(straight(texture(uCapture,vPosition)));
+            c=quantise(straight(texture(uScreen3d,vPosition)));
         } else {
             int bank=int((control>>18)&3u);
             if(((int(uMode.y)>>bank)&1)==0)c=0xff000000u;
@@ -1505,7 +1526,7 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
     }
     gl::BindTexture(GL_TEXTURE_2D,0);
 }
-bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& display,std::string& why) const {
+bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& display,bool scene3d,std::string& why) const {
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
@@ -1528,7 +1549,9 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     if(mode>5) {why="background mode "+std::to_string(mode);return false;}
     if(control&0xe000) {why="windows";return false;}
     if(control&(1u<<30)) {why="extended palettes";return false;}
-    if(!sub&&(control&8)) {why="BG0 draws 3D";return false;}
+    // BG0 drawing the 3D screen needs the picture itself; without it Display
+    // draws nothing at all there, so there is nothing to compose either.
+    if(!sub&&(control&0x108)==0x108&&!scene3d) {why="BG0 draws 3D";return false;}
     for(unsigned bg=0;bg<4;++bg)if(control&(0x100<<bg)) {
         const unsigned cnt=reg16(base+8+bg*2);
         // Affine backgrounds are tile maps here: the 8-bit map of modes 1/2/4
@@ -1562,8 +1585,8 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     }
     return true;
 }
-bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned capture) {
-    if(!composeSupported(video,sub,display,why))return false;
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned scene3d) {
+    if(!composeSupported(video,sub,display,scene3d!=0,why))return false;
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
@@ -1608,7 +1631,7 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     // at 0x05000400 (entry 0x200). Entry 0 doubles as the backdrop of each.
     // The last component says the screen is one picture the compositor has as a
     // texture: display mode 2 then samples that instead of the VRAM bank.
-    const bool captureShown=capture&&((control>>16)&(sub?1:3))==2;
+    const bool captureShown=scene3d&&((control>>16)&(sub?1:3))==2;
     const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),
         captureShown?1.f:0.f};
     int bankMask=0;
@@ -1623,11 +1646,13 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
     gl::ActiveTexture(GL_TEXTURE1);gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
     gl::ActiveTexture(GL_TEXTURE2);gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
-    gl::ActiveTexture(GL_TEXTURE3);gl::BindTexture(GL_TEXTURE_2D,captureShown?capture:0);
+    const bool threeShown=captureShown||(!sub&&(control&0x108)==0x108);
+    gl::ActiveTexture(GL_TEXTURE3);gl::BindTexture(GL_TEXTURE_2D,threeShown?scene3d:0);
     gl::Uniform1i(uniform(compose2dProgram_,"uVram"),0);
     gl::Uniform1i(uniform(compose2dProgram_,"uPalette"),1);
     gl::Uniform1i(uniform(compose2dProgram_,"uOam"),2);
-    gl::Uniform1i(uniform(compose2dProgram_,"uCapture"),3);
+    gl::Uniform1i(uniform(compose2dProgram_,"uScreen3d"),3);
+    gl::Uniform1f(uniform(compose2dProgram_,"uThreeOn"),!sub&&(control&0x108)==0x108&&scene3d?1.f:0.f);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgCnt"),4,bgCnt);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgOff"),4,bgOff);
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinBase"),1,windowBase);

@@ -80,13 +80,15 @@ B2 的**第一段已落地**（`compose2dFragment` + `GpuRenderer::composeScreen
 PA–PD 矩阵、28 位参考点、溢出回绕、256 色）、256 个文本 OBJ（两种字符映射、两个引擎、
 4bpp/8bpp、翻转、优先级、半透明）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、
 BLDY、主亮度；由 `?gpucompose` 选择，未覆盖的态（仿射/位图精灵、窗口、马赛克、扩展调色板、
-BF 模式 6–7、仿射位图、BG0 画 3D）一律回退 CPU；显示模式 2 还有一条直通（B2d，见下：屏幕就是
-本帧捕获的那张 3D 图时，采样图本身而不是 VRAM 里的副本）。另有两个态根本不在寄存器里，而是 `Display`
+BF 模式 6–7、仿射位图）一律回退 CPU；BG0 画 3D 这条现在也做（把 3D 缩略图当一层：
+BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`、透明像素让给下层），
+没有 3D 图时才回退；显示模式 2 还有一条直通（B2d，见下：屏幕就是本帧捕获的那张 3D 图时，
+采样图本身而不是 VRAM 里的副本）。另有两个态根本不在寄存器里，而是 `Display`
 自己的：战斗 band（`setBand`，把底屏名牌挪到屏外）和菜单的世界背景（`setWorldBackground`，
 用 3D 目标 0 顶替捕获副本）。这两条 `composeSupported` 直接问 `Display`，给的拒绝理由是
 `[battle band N]` / `[world background N]`——如果不问，探针会在战斗和菜单里把"GPU 合成
 少了 name plate / 世界图"算成 0 差异以外的东西，反而说不清。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360 of 49152 differ)`：
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
 翻转、回绕与两个引擎，各自也是 0 差异。精灵三组：一屏七个对象（压过 BG 的实心 4bpp、
@@ -94,6 +96,9 @@ GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差�
 较低 id 胜出），1D 字符映射一组，子引擎一组（自己的 `0x06600000`/OAM `0x07000400`/
 调色板 `0x300`）。每组都在关掉对象层后再合成一次，两次之差必须非零——`obj 0/1827` 的前一个
 数是「与 CPU 的差异」，后一个数是「对象真的画上去了多少像素」，只有前者为 0 的测试会空转。
+BG0 画 3D 那一组给的是预乘纹理 + 反预乘后的 ARGB 两份，透明度取 0/128/255 三档，覆盖
+透明让位、五位 alpha 混合与不透明直出，并额外钉住一个只可能来自 3D 图的像素（否则整屏
+只有 backdrop 也照样「与 CPU 相同」）。
 过程中抓到的真错：主引擎的 BG 调色板基址是 `0x05000000`（不是 `0x200`，那是 OBJ 调色板）；
 着色器输出把 ARGB 写成了 BGR；DISPCNT 的 bit 24–29（字符/地图扩展基址）用 float 传会丢位，
 改成低 24 位 + 顶字节分两段上传；引擎 B 的 BG 从 `0x06200000` 起读、四个 128 KB 窗口彼此

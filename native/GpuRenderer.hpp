@@ -134,12 +134,13 @@ public:
     // Display has two other states the compositor cannot see - the battle band
     // and the menu's world background - so a caller that turns either on must
     // not take this path: `display` is asked, not the registers.
-    // `capture`: a texture holding exactly the picture display mode 2 shows, or 0
-    // to read it from the VRAM bank the capture wrote it into.
-    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned capture=0);
+    // `scene3d`: the screen's reduced 3D picture, or 0 when there is none. BG0
+    // shows it where DISPCNT says BG0 draws 3D, and display mode 2 shows it
+    // instead of the VRAM copy when the capture left nothing else in the bank.
+    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned scene3d=0);
     // The same test without drawing: what a frame would need that the GPU path
     // does not have yet (empty when it can take the frame).
-    bool composeSupported(NitroVideo&,bool sub,const Display&,std::string& why) const;
+    bool composeSupported(NitroVideo&,bool sub,const Display&,bool scene3d,std::string& why) const;
     unsigned screenTexture(bool sub) const {return screens_[sub?1:0].color;}
     // The composed screen, top-down ARGB (verification only).
     std::vector<std::uint32_t> readScreen(bool sub);
