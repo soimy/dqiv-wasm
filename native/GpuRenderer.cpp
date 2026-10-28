@@ -1539,6 +1539,9 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     // they are asked directly.
     if(display.bandOn()) {why="battle band";return false;}
     if(display.worldBackground()) {why="world background";return false;}
+    // HD pictures replace tiles on the canvas, not in VRAM, so a screen composed
+    // from VRAM would show the tiles underneath instead.
+    if(display.showsHdPictures()) {why="hd pictures";return false;}
     if(control&128) {why="forced blank";return false;}
     // Display::engine masks the sub engine's display mode with 1, not 3.
     const unsigned displayMode=(control>>16)&(sub?1:3);

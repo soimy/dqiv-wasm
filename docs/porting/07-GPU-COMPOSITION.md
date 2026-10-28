@@ -84,10 +84,12 @@ BF 模式 6–7、仿射位图）一律回退 CPU；BG0 画 3D 这条现在也�
 BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`、透明像素让给下层），
 没有 3D 图时才回退；显示模式 2 还有一条直通（B2d，见下：屏幕就是本帧捕获的那张 3D 图时，
 采样图本身而不是 VRAM 里的副本）。另有两个态根本不在寄存器里，而是 `Display`
-自己的：战斗 band（`setBand`，把底屏名牌挪到屏外）和菜单的世界背景（`setWorldBackground`，
-用 3D 目标 0 顶替捕获副本）。这两条 `composeSupported` 直接问 `Display`，给的拒绝理由是
-`[battle band N]` / `[world background N]`——如果不问，探针会在战斗和菜单里把"GPU 合成
-少了 name plate / 世界图"算成 0 差异以外的东西，反而说不清。
+自己的：战斗 band（`setBand`，把底屏名牌挪到屏外）、菜单的世界背景（`setWorldBackground`，
+用 3D 目标 0 顶替捕获副本），以及这一帧有没有高清图（`setHdPictures`/`hd_`）。这三条
+`composeSupported` 直接问 `Display`，拒绝理由是 `[battle band N]` / `[world background N]` /
+`[hd pictures N]`。高清图那条尤其要紧：HD 的图块是在画布上盖上去的，VRAM 里仍然是旧图块，
+所以"从 VRAM 合成"会安静地画出旧图——探针逐像素比对其实看不出来（CPU 的 `pixels()` 里也
+没有 HD），只有真机画面会不对，属于必须提前拒绝、不能等 CI 发现的那类。
 自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、

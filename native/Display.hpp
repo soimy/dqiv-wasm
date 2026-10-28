@@ -39,6 +39,10 @@ public:
     // through the sub engine's bare backdrop.
     void setWorldBackground(bool on) {world_=on;}
     bool worldBackground() const {return world_;}
+    // This frame's backgrounds include high-resolution pictures (HdPictures):
+    // their tiles are not colours in VRAM at all, so a composer that reads VRAM
+    // would draw the old tiles where the picture goes.
+    bool showsHdPictures() const {return hd_;}
     // The main engine shows such a copy: BG2 as a direct-colour bitmap, enabled
     // and untransformed, and BG0 not showing 3D.
     static bool showsBitmapBackdrop(NitroVideo&);
