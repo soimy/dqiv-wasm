@@ -197,7 +197,8 @@ flag 时整屏是 backdrop 色**，所以这个用例不可能因为"什么都�
 （它的那半场景根本没有缩略图），`composeSupported` 一律以 `backdrop 3D` 回退给 `Display`；
 探针的逐像素 diff 对烘焙过的帧跳过——那是**故意的**差异，比了只会天天报假警。
 
-**画布那条采样路径也已经有了（还没接上游戏）**：`GpuLayout::composedTop`（0/1，哪一屏在上）
+**画布那条采样路径已经有了，并且接上了 `Mode::single`（`?gpucompose=1`）**：
+`GpuLayout::composedTop`（0/1，哪一屏在上）
 一设，`present()` 就不再上传 4 个 recipe 平面（2.9 MB/帧），画布着色器的 `uComposed` 分支按
 `cell` 的行号采样对应的 `screens_[…]`，`pixel()`/`hdOver` 都绕开 recipe。自检是把**同一帧**
 用两条路各呈现一次再逐像素比：`canvas 0 of 196608 differ`（recipe 那条先按 presenter 的布局
@@ -215,8 +216,18 @@ capture 之前**的图形层（`Display::engine` 里 `graphics_=output` 就在�
 即不做模式 2 的整屏取图），split 用它；`single`（不捕获的那些帧）才用最终输出那版。
 另外 split 的记账是"每个屏各自保留自己那张"（`subEngine` 为假的帧不重算子屏），接到纹理上
 就是"子屏不重算时保留它的纹理"，`screens_` 本来就一直在；只要把"这一帧有没有更新过"记清楚，
-别把上一帧的屏当成这一帧的。B3 的下一步就是这个，接上之后 `?gpucompose=1` 才真的能省
-`pres 1207`（`dr`/`dc` 要等 B4 把 `hd_` 的判定从 `engine()` 里拆出来之后才能一起省）。
+别把上一帧的屏当成这一帧的。
+
+**现在已经接上的是 `Mode::single`**（`?gpucompose=1`，默认关）：`FramePresenter` 在
+`display_.frame()` 之后把两个引擎合成进 `screens_`，成功就把 `layout_.composedTop` 设成
+`mainTop?0:1`，于是 `present()` 不再传 recipe、画布直接采样那两张图；失败就退回 recipe，
+第一帧之后每 120 帧打一行 `compose use: fell back, <理由>`。`empty_`（面板布局"另一屏是否空白"
+的判据）照旧从 `display_.recipes()` 里数，只跳过 2.9MB 的拷贝；`split/joined/field/effect`
+仍然整条走 recipe——城镇那种帧先要在真机上把"画布到底该画图形层还是最终输出"确认下来，
+再按上面的图形变体接。
+
+因此 `?gpucompose=1` 现在只省 `pres` 的一半（拷贝 + 上传；`display_.frame()` 还在跑），
+`dr`/`dc` 要等 B4 把 `hd_` 的判定从 `engine()` 里拆出来、能整条跳过 CPU 合成之后才省得掉。
 
 **B4 捕获上 GPU（1–2 天）**
 捕获 = 从 3D/画布纹理 blit 进捕获纹理；显示它（LCDC 直读 bank 的模式 2）时采样捕获纹理。
@@ -230,5 +241,7 @@ capture 之前**的图形层（`Display::engine` 里 `graphics_=output` 就在�
 与 B 正交，B 落地后若离 60 还差再动它。
 
 ## 6. 回退
-B1–B4 全部有开关（`?gpucompose=0/1/diff`），任一阶段出问题都能退回现路径；CPU 合成代码
-在 B5 之前不删。
+B1–B4 全部有开关，任一阶段出问题都能退回现路径；CPU 合成代码在 B5 之前不删：
+`?gpucompose=1` 用 GPU 合成的屏（当前只有 `Mode::single` 会走，其余帧自动退回），
+`?gpucompose=probe` 只统计能接的帧与理由（不改画面），`?gpucompose=diff` 再加上每 60 帧
+一次的逐像素比对。

@@ -375,8 +375,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE void dqiv_toggle(int which) {
 
 int main() {
 #ifdef __EMSCRIPTEN__
-    // ?gpucompose=probe|diff (docs/porting/07-GPU-COMPOSITION.md): the switch for
-    // what the GPU composition can take in this build's frames. Read here rather
+    // ?gpucompose=1|probe|diff (docs/porting/07-GPU-COMPOSITION.md): present the
+    // GPU composition, or report what it can take in this build's frames. Read here rather
     // than driven from the page, so it is one thing to trust instead of two.
     {
         // Node has no location, and the startup smoke test runs this build there:
@@ -384,6 +384,7 @@ int main() {
         const std::string query=emscripten_run_script_string("typeof location!=='undefined'?location.search:''");
         if(query.find("gpucompose=diff")!=std::string::npos) {pc::diag::composeProbe=true;pc::diag::composeDiff=true;}
         else if(query.find("gpucompose=probe")!=std::string::npos) pc::diag::composeProbe=true;
+        else if(query.find("gpucompose=1")!=std::string::npos) pc::diag::composeUse=true;
     }
 #endif
 #ifdef __EMSCRIPTEN__

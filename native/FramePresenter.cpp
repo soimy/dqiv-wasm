@@ -225,6 +225,26 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     display_.setBand(mode==Mode::battle&&wideBattleFrame());
     display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
     if(diag::composeProbe||diag::composeDiff)probeComposition(video,mainTop);
+    // Stage B3 (?gpucompose=1): when the canvas shows the display engine's own
+    // output, the two screens composed on the GPU are that picture already, so the
+    // canvas takes them and the recipes - four planes, 2.9 MB a frame - stay home.
+    // Only the single-screen layout is wired for now: split/joined/field/effect
+    // present Display's graphics recipes (before its mode mux) instead, and the
+    // town's frames need that decided first (docs/porting/07).
+    bool screens=false;
+    if(diag::composeUse&&mode==Mode::single&&!display_.showsHdPictures()&&!layout_.sides&&
+        !layout_.band&&layout_.inset[2]<=0) {
+        const unsigned capture=window_.gpu().nativePictureReady()&&display_.showsThreeCapture(video)?
+            window_.gpu().nativeTexture():0;
+        std::string why;
+        screens=window_.gpu().composeScreen(video,false,display_,why,capture)&&
+            window_.gpu().composeScreen(video,true,display_,why,capture);
+        if(screens)layout_.composedTop=mainTop?0:1;
+        else {
+            static unsigned fellBack=0;
+            if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());
+        }
+    }
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
@@ -252,10 +272,10 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
         }
     } else {
         const auto all=display_.recipes();
-        for(unsigned plane=0;plane<Display::recipePlanes;++plane)
-            std::copy_n(all.data()+plane*screenPixels*2,screenPixels*2,recipes_.data()+plane*planePixels);
         for(unsigned s=0;s<2;++s)empty_[s]=emptyScreen(all.subspan(s*screenPixels,screenPixels))?empty_[s]+1:0;
-        if(layout_.band) {
+        if(!screens)for(unsigned plane=0;plane<Display::recipePlanes;++plane)
+            std::copy_n(all.data()+plane*screenPixels*2,screenPixels*2,recipes_.data()+plane*planePixels);
+        if(!screens&&layout_.band) {
             // The plates above the bottom screen: their colour, or the scene
             // (the bare backdrop), with the bottom screen's master brightness.
             const auto band=display_.band();
