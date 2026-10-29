@@ -237,6 +237,9 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // Why a frame the canvas could have taken did not: "composed nothing" and
     // "composed 240 frames and stopped" look the same from outside otherwise.
     const char* screenReason="";
+    // The compositor's own refusal: it has to outlive the call that fills it
+    // (screenReason may point into it).
+    std::string why;
     if(pc::hdPicturesLoaded())screenReason="hd pictures";
     else if(layout_.sides)screenReason="sides";
     else if(layout_.band)screenReason="band";
@@ -244,16 +247,11 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
     // composed path recomputes the current one and does not match (docs/porting/07).
     else if(layout_.placed)screenReason="panels";
-    // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
-    // composed path recomputes the current one and does not match (docs/porting/07).
-
-
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
     if(diag::composeUse&&!*screenReason) {
         const bool ready=window_.gpu().nativePictureReady();
         const unsigned picture=ready?window_.gpu().nativeTexture():0;
         const bool capture=ready&&display_.showsThreeCapture(video);
-        std::string why;
         if(mode==Mode::single) {
             // The engine that drives the top screen can change: LCDC says which.
             screens=window_.gpu().composeScreen(video,false,display_,why,picture,capture,false,false,
@@ -294,6 +292,24 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     if(diag::composeUse&&!screens) {
         static unsigned skipped=0;
         if(++skipped%120==1)std::printf("compose use: not composed, %s\n",*screenReason?screenReason:"?");
+    }
+    if(checkFrame_) {
+        // The registers and the 3D picture behind this frame's picture, so a wrong
+        // one can be traced to what the compositor was told (docs/porting/07).
+        static const char* modeName[]={"single","split","joined","battle","field","menu","effect"};
+        const auto& control=*static_cast<unsigned*>(video.reg(0x04000000,4));
+        const auto& subControl=*static_cast<unsigned*>(video.reg(0x04001000,4));
+        const auto& cap=*static_cast<unsigned*>(video.reg(0x04000064,4));
+        unsigned long long three=0;
+        for(const auto p:native3d_)three+=((p>>16)&255)+((p>>8)&255)+(p&255);
+        std::printf("compose check state: %s, mainTop %d, placed %d, composed %d [%s]"
+            ", control %08x sub %08x cap %08x, deferrable %d threeCapture %d"
+            ", 3D %zu px mean %llu, rects %.0fx%.0f %.0fx%.0f\n",
+            modeName[unsigned(mode)%7],mainTop?1:0,layout_.placed?1:0,layout_.composed[0],
+            *screenReason?screenReason:"?",control,subControl,cap,
+            display_.captureDeferrable(video)?1:0,display_.showsThreeCapture(video)?1:0,
+            native3d_.size(),native3d_.empty()?0ull:three/(native3d_.size()*3),
+            layout_.threeRects[0][2],layout_.threeRects[0][3],layout_.threeRects[1][2],layout_.threeRects[1][3]);
     }
     // B4: a capture that is this screen's 3D picture alone, whole, at the start of
     // the bank the display shows needs no CPU loop at all - the renderer makes it,
@@ -477,6 +493,12 @@ void FramePresenter::present() {
     {
         // What the compositor actually put in each slot, coarsely, and what the
         // recipes' plane 0 holds where the canvas draws the screens.
+        for(unsigned screen=0;screen<2;++screen) {
+            unsigned long long sum=0;
+            const auto at=recipes_.data()+std::size_t(screen)*screenPixels;
+            for(unsigned p=0;p<screenPixels;++p)sum+=((at[p]>>16)&255)+((at[p]>>8)&255)+(at[p]&255);
+            std::printf("compose check recipe %u mean %llu\n",screen,sum/(screenPixels*3));
+        }
         for(int slot=0;slot<4;++slot) {
             const auto pixels=window_.gpu().readScreenSlot(slot);
             unsigned long long sum=0;

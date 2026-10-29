@@ -333,28 +333,37 @@ compose use: 240 frames presented from the composed screens   （?gpucompose=1�
 
 **`?gpucompose=check`：同帧呈现比对。** 每 120 帧把同一帧先按合成屏呈现、再按 recipe
 呈现，各自 `readPresented` 后逐像素比较，打印差异数、最大步进、包围盒、分带直方图、一张
-16×16 的 `#/.` 差异图，以及两张 64×32 的灰度缩略图。这是任何新布局/新路径的验收闸门。
+16×16 的 `#/.` 差异图，以及两张 64×32 的灰度缩略图。另有 `compose check state:`（这帧的
+模式、寄存器与 3D 图均值）和 `compose check recipe N mean`（recipe plane 0 每屏均值）两行，
+用来区分"合成算错"和"两本账不一致"。这是任何新布局/新路径的验收闸门。
 
 它立刻抓到一个**真问题**：在**面板布局**（`layout_.placed`，宽窗口下两屏并排）里，合成呈现
 与 recipe 呈现差 25% 的像素。闸门因此加上 `panels`（`compose use: not composed, panels`），
 `?gpucompose=1` 暂时不进这种帧。
 
-排查到的事实（还没修完，写下来免得重来）：check 打印的布局是 `canvas 683x384 placed 1
-screens [0,64 341x256] [341,64 341x256] composed 2,3`，两张 64×32 缩略图显示**合成呈现
-几乎全黑**、而 recipe 呈现右半有画面。合成屏是这帧的"图形变体"（mux 之前的层），标题画面
-那种帧的图形层本来就近乎空——CPU 那边右半之所以有画面，来自 `screenRecipes_` 按屏保留的
-旧图；也就是说这条差异的根因在"每屏记忆"没有对应的纹理，而不在面板几何本身。下一个动作
-是把 `seen_[s]`/`screenRecipes_[s]` 的语义搬到纹理（切屏时冻结，而不是每帧重算），再用
-`?gpucompose=check` 量到个位数步进、才允许 `panels` 重新进闸门。
+排查到的事实（还没修完，写下来免得重来）。先纠正上一版的两处误判：check 只在**画布真的
+采用合成屏**时才会比对（`layout_.composed[0]>=0`），所以 `panels` 进闸门之后这帧再也不被
+检查；要复现必须临时放行（本轮试过两次，都没提交）。放行后量到的布局是
+`canvas 683x384 placed 1 ... composed 2,3`，帧型是 **`split`**（不是 `single`）、
+`mainTop 1`、主引擎显示模式 2、`DISPCAPCNT c0330010`（源=3D、尺寸=整屏、模式 2 混合），
+因此 `deferrable 0` 且 `threeCapture 0`——这一帧本来就不走捕获直通。
 
-再往下量了一层，根因不在"每屏记忆"：check 里加打印四个槽的平均亮度后是
-`slot 0 mean 85 / slot 1 mean 85 / slot 2 mean 2 / slot 3 mean 8`——**合成出来的屏就是黑的**，
-而 CPU 那边 recipe 是亮的。槽 0/1（引擎自己的图）是启动自检留下的，2/3 才是当帧合成结果。
-也就是说，面板这几帧（`single` + 显示模式 2）里 `composeScreen` 产出的画面与
-`display_.recipes()` 不一致；而这正是 B4 惰性捕获带来的耦合：捕获被推迟时 VRAM 里是旧 bank，
-`composeScreen` 的模式 2 路径如果落到"读 bank"就会读到黑。临时把"可推迟捕获"也当成直通
-（用图而不是 bank）并重编，槽 2/3 仍是 2/8，说明还有第二处；把两处试探都回退，只保留
-`readScreenSlot` 与槽均值打印（只在 check 模式跑），作为下一步的入口。
+新加的诊断（`compose check state:` / `compose check recipe N mean`）把差异劈成两半：
+主引擎那一屏的 recipe plane 0 均值 **0**、当帧 3D 图均值 **2**、合成槽 **2**——**上屏不是 bug，
+它本来就是接近全黑的**（这一帧的画面是"捕获里的 3D"，图形层几乎是空的）。差异全部在**下屏**：
+recipe 均值 **54**，合成槽 **8**。下屏是 split 的"保留半边"，CPU 把它存在
+`screenRecipes_[1]`，只在主引擎当时驱动那一屏的帧更新——`joined`/`field`/`effect` 也算，
+而合成器只在它自己呈现的 split 帧里写槽。两本账因此会走散：本轮把槽 2/3 换成专用记忆槽
+4/5、并在每个图形布局帧都合成一次之后，上屏吻合（槽 4 = 2），下屏仍是 8 对 54。
+说明还有一条路径能让槽落在账本后面（合成失败的一帧、或"另一屏没有自己的图"时的整槽拷贝，
+都会留下一个不算旧但也不等于账本的槽）。两处试探与其后的记忆槽改动都回退，只保留诊断：
+`compose check state:`（模式/寄存器/可延迟捕获/3D 图均值/矩形）与
+`compose check recipe N mean`（recipe plane 0 每屏均值）——它们把"合成黑"和"账本走散"分开了，
+下一个动作是让每屏记忆只有**一个**来源：槽只在账本被赋值的那一帧写，写不成就标记失效，
+呈现前要求两者相等。
+
+顺带修掉一个真存在的悬垂指针：`screenReason=why.c_str()` 里的 `why` 是块内局部量，
+过了块就销毁，`compose use: not composed, ...` 打印的是已释放内存（现在 `why` 提到函数作用域）。
 
 ### 真机验收怎么做
 
