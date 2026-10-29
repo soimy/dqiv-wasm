@@ -415,6 +415,10 @@ void Display::frame(NitroVideo& video,std::span<const std::uint32_t> three,bool 
         std::copy_n(mainRecipes_.data()+plane*count,count,destination+(mainTop?0:count));
         std::copy_n(subRecipes_.data()+plane*count,count,destination+(mainTop?count:0));
     }
+    captureOnly(video,three);
+}
+void Display::captureOnly(NitroVideo& video,std::span<const std::uint32_t> three) {
+    const bool mainTop=(r16(video,0x04000304)&0x8000)!=0;mainTop_=mainTop;
     ProfileScope timing("display-capture");
     capture(video,three);
 }

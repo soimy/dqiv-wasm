@@ -250,6 +250,23 @@ split 的记账照旧：`seen_[0]/seen_[1]` 决定两半各自取哪块槽位（
 捕获 = 从 3D/画布纹理 blit 进捕获纹理；显示它（LCDC 直读 bank 的模式 2）时采样捕获纹理。
 只有 CPU 真去读那段 VRAM（DMA/纹理上传）时才做一次惰性读回。readback 从此消失。
 
+**B4 的第一半已经落地：合成成功的帧不再跑 `Display` 的 CPU 合成。** 既然画布要的那张图
+GPU 已经合成好了，`display_.frame()`（`dr`+`dc` ≈ 3.5ms）就是白算的；但它还兼着捕获单元
+（游戏会把捕获的 bank 当纹理读回去），所以拆出 `Display::captureOnly()`，这些帧只跑捕获。
+两条边界写死：
+
+1. **只要加载过任何 HD 图就整条不跳**（`HdPictures::hdPicturesLoaded()`）。判据不是
+   `Display::showsHdPictures()`——那个只看"注册的图块"，不包含 `placeHdPicture` 画上去的那种，
+   而后者同样只在 recipe 平面 3 里、不在 VRAM 里；跳了 CPU 合成又没有 recipe，画布就画不出它。
+   顺带这一条也修了一个潜在 bug：原来的合成闸门只用 `showsHdPictures()`，place 型 HD 图会漏过去。
+2. **捕获源不是 3D 的帧不跳**（`DISPCAPCNT` bit 24 清、且捕获开着）：那种捕获的像素来自
+   `graphics_`，也就是 CPU 合成的产物，跳过就没有了。
+
+代价写在明处：合成帧上 `display_.pixels()`/`recipes()` 是旧值，所以探针模式（`probe`/`diff`）
+一概不跳；`empty_`（面板布局"另一屏是否空白"）也不再更新——没有诚实的来源，面板就保持上一次
+的判断。探针的 diff 另外跳过捕获直通的帧：那条路采样的是本帧的图，而 Display 读的 bank 里是
+上一帧捕获的，两者本来就不该相等。
+
 **B5 收敛（1 天）**
 四场景逐像素回归、真机 fps、Windows CI 三绿。
 

@@ -28,6 +28,10 @@ bool hdFrameTags(bool sub,std::span<const std::uint8_t> vram,unsigned vramMask,s
 // cleared; `source` as for registerHdPicture.
 void placeHdPicture(int screen,int x,int y,int width,int height,std::span<const std::uint8_t> source);
 void clearHdPictures(int screen);
+// True while any picture is known - registered tiles or one placed for drawing.
+// A composer that reads VRAM should then stay out of the way: the pictures are
+// not in VRAM at all (Display's hd_ only tracks the registered kind).
+bool hdPicturesLoaded();
 // Adds the placed pictures of `screen` to its recipe plane 3 (256 x 192),
 // where it has no tag yet. `palette`: the main engine's standard palette.
 void hdScreenTags(int screen,std::span<const std::uint8_t> palette,std::span<std::uint32_t> tags);

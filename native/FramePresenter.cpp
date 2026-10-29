@@ -2,6 +2,7 @@
 #include "DualScreen.hpp"
 #include "NitroVideo.hpp"
 #include "Diagnostics.hpp"
+#include "HdPictures.hpp"
 #include "Profile.hpp"
 #include <algorithm>
 #include <cmath>
@@ -223,8 +224,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     else native3d_.clear();
     display_.setWorldBackground(mode==Mode::menu);
     display_.setBand(mode==Mode::battle&&wideBattleFrame());
-    display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
-    if(diag::composeProbe||diag::composeDiff)probeComposition(video,mainTop,mode);
+    const bool probing=diag::composeProbe||diag::composeDiff;
     // Stage B3 (?gpucompose=1): where the canvas shows a picture the compositor can
     // build - the display engine's own output (single), or the layers before its
     // display mode picks a source (split, the town's two-screen 3D frames) - it
@@ -233,7 +233,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // and bottom screens as the canvas draws them. A frame that falls back keeps the
     // whole recipe path.
     bool screens=false;
-    if(diag::composeUse&&!display_.showsHdPictures()&&!layout_.sides&&!layout_.band&&
+    if(diag::composeUse&&!pc::hdPicturesLoaded()&&!layout_.sides&&!layout_.band&&
         layout_.inset[2]<=0&&(mode==Mode::single||mode==Mode::split)) {
         const bool ready=window_.gpu().nativePictureReady();
         const unsigned picture=ready?window_.gpu().nativeTexture():0;
@@ -260,12 +260,24 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());
         }
     }
+    // A frame the canvas takes from the GPU does not need Display's composition:
+    // it is the same picture, built on the GPU instead. What it still needs is the
+    // capture unit, because the game reads the captured bank back as a texture -
+    // so Display runs only far enough to do that. Anything but the 3D source takes
+    // its pixels from the composition itself, so those frames keep it.
+    const unsigned captureNow=*static_cast<unsigned*>(video.reg(0x04000064,4));
+    const bool captureFrom3d=!(captureNow&0x80000000u)||(captureNow&(1u<<24))!=0;
+    if(screens&&!probing&&captureFrom3d)display_.captureOnly(video,native3d_);
+    else display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
+    if(probing)probeComposition(video,mainTop,mode);
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
         if(!screens)screenRecipes_[screen].assign(main.begin(),main.end());
         seen_[screen]=true;
-        empty_[screen]=emptyScreen(main)?empty_[screen]+1:0;
+        // Display's composition did not run on a composed frame, so there is
+        // nothing honest to measure here: the panel layout keeps its last answer.
+        if(!screens)empty_[screen]=emptyScreen(main)?empty_[screen]+1:0;
         const auto& top=screenRecipes_[seen_[0]?0:screen];
         const auto& bottom=screenRecipes_[seen_[1]?1:screen];
         if(mode==Mode::field) {
@@ -289,7 +301,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
         }
     } else {
         const auto all=display_.recipes();
-        for(unsigned s=0;s<2;++s)empty_[s]=emptyScreen(all.subspan(s*screenPixels,screenPixels))?empty_[s]+1:0;
+        if(!screens)for(unsigned s=0;s<2;++s)empty_[s]=emptyScreen(all.subspan(s*screenPixels,screenPixels))?empty_[s]+1:0;
         if(!screens)for(unsigned plane=0;plane<Display::recipePlanes;++plane)
             std::copy_n(all.data()+plane*screenPixels*2,screenPixels*2,recipes_.data()+plane*planePixels);
         if(!screens&&layout_.band) {
@@ -343,9 +355,11 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop,Mode mode) 
             std::string why;
             if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?picture:0,
                 engine==0&&capture!=0,bake))continue;
-            // The baked 3D through the backdrop is a deliberate difference: Display
-            // has no 3D picture and shows the backdrop colour there.
-            if(bake)continue;
+            // Two deliberate differences, so they are not compared: the baked 3D
+            // through a bare backdrop (Display shows the backdrop colour there, it
+            // has no 3D), and the capture passthrough (it samples this frame's
+            // picture; the bank Display reads holds the one captured last frame).
+            if(bake||capture!=0)continue;
             const auto gpu=window_.gpu().readScreen(engine!=0);
             const auto cpu=display_.pixels();
             const std::size_t at=((engine==0)==mainTop)?0:std::size_t(256)*192;

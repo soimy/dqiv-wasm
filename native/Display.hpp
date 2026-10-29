@@ -20,6 +20,10 @@ public:
     Display();
     // `subEngine` false skips the sub engine (its screen is not presented).
     void frame(NitroVideo&,std::span<const std::uint32_t> graphics3d,bool subEngine=true);
+    // The capture unit's own work, without composing either engine: a caller that
+    // already has the display's picture on the GPU still needs the captured bank
+    // written, because the game reads it back as a texture.
+    void captureOnly(NitroVideo&,std::span<const std::uint32_t> graphics3d);
     std::span<const std::uint32_t> pixels() const {return screens_;}
     std::span<const std::uint32_t> mainGraphics() const {return graphics_;}
     std::span<const std::uint32_t> recipes() const {return recipes_;}

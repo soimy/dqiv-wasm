@@ -119,6 +119,9 @@ void placeHdPicture(int screen,int x,int y,int width,int height,std::span<const 
 void clearHdPictures(int screen) {
     if(screen>=0&&screen<=1)placed()[screen].clear();
 }
+bool hdPicturesLoaded() {
+    return !state().pictures.empty()||!placed()[0].empty()||!placed()[1].empty();
+}
 void hdScreenTags(int screen,std::span<const std::uint8_t> palette,std::span<std::uint32_t> tags) {
     for(const auto& picture:placed()[screen]) {
         const int cell=cellFor(picture.indices,palette);
