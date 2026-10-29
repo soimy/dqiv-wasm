@@ -246,7 +246,11 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     else if(layout_.inset[2]>0)screenReason="inset";
     // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
     // composed path recomputes the current one and does not match (docs/porting/07).
-    else if(layout_.placed)screenReason="panels";
+    // Panel layouts present the same two composed pictures split does; the 2D layer
+    // is the same one (the check compares it kind by kind). A single frame's panel
+    // picture comes from the display mode's own source instead, which the composed
+    // path has only been checked on outside this layout (docs/porting/07).
+    else if(layout_.placed&&mode!=Mode::split)screenReason="panels";
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
     // The main engine's graphics picture on its own, every graphics-layout frame:
     // the half the split layout gives the engine's screen is this frame's picture
@@ -286,7 +290,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
                     // texture holds it: this frame stays with them.
                     screens=false;screenReason="screen picture";
                 } else layout_.composed={screen==0?4:otherSlot,screen==0?otherSlot:4};
-            } else screenReason=memoryWhy.c_str();
+            } else screenReason=*memoryWhy.c_str()?memoryWhy.c_str():"graphics";
         }
         if(screens) {
             // The acceptance number: frames whose picture the canvas took from the
@@ -361,6 +365,29 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             if(composedSlot_[5+screen])window_.gpu().copyScreenSlot(4,5+screen);
         }
         seen_[screen]=true;
+        if(diag::composeCheck&&checkFrame_&&composedSlot_[4]) {
+            // The compositor's 2D picture against the recipes' own, on the pixels the
+            // recipes call 2D (plane 0's alpha is the recipe kind; kind 0 is a plain
+            // 2D pixel). The 3D kind is left out: the canvas draws that layer at the
+            // panel's resolution and a composed screen bakes it at 256 x 192
+            // (docs/porting/07), so only the 2D layer can be compared for equality.
+            const auto gpu=window_.gpu().readScreenSlot(4);
+            unsigned pixels=0,different=0,worst=0;
+            for(unsigned p=0;p<screenPixels;++p) {
+                const unsigned r=main[p];
+                if(r>>24)continue;
+                ++pixels;
+                const unsigned a=gpu[p]&0xffffffu,b=r&0xffffffu;
+                if(a==b)continue;
+                ++different;
+                for(unsigned shift=0;shift<24;shift+=8) {
+                    const unsigned x=(a>>shift)&255,y=(b>>shift)&255;
+                    worst=std::max(worst,x>y?x-y:y-x);
+                }
+            }
+            std::printf("graphics check: screen %u, %u of %u 2D pixels differ, worst step %u\n",
+                screen,different,pixels,worst);
+        }
         // Display's composition did not run on a composed frame, so there is
         // nothing honest to measure here: the panel layout keeps its last answer.
         if(!screens)empty_[screen]=emptyScreen(main)?empty_[screen]+1:0;

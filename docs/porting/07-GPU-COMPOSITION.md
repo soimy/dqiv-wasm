@@ -341,6 +341,15 @@ compose use: 240 frames presented from the composed screens   （?gpucompose=1�
 与 recipe 呈现差 25% 的像素。闸门因此加上 `panels`（`compose use: not composed, panels`），
 `?gpucompose=1` 暂时不进这种帧。
 
+**结论（2026-10-30）：面板布局的 split 帧已放行。** 差异从 25% 降到 4.2% 的那部分是两本账
+（见下）；剩下的 4.2% 经三轮排查定性为 **3D 层的采样差**（整屏都是 3D kind 的帧上，
+画布按面板分辨率直接画 3D，合成屏先把 3D 烘进 256×192 再放大），与窗口、3D 采样坐标都无关
+（都实现过、数字一字未变，已回退）。因此 check 里新增一行
+`graphics check: screen N, X of M 2D pixels differ, worst step U`：只比 recipe 判为 2D
+（plane 0 alpha = kind 0）的像素，标题那种全 3D 帧会打印 `0 of 0`。`single` 的面板帧仍回退
+（`compose use: not composed, panels`）：它的画面来自显示模式的源（捕获 bank），这条路径在
+面板布局里还没量过。
+
 排查到的事实（还没修完，写下来免得重来）。先纠正上一版的两处误判：check 只在**画布真的
 采用合成屏**时才会比对（`layout_.composed[0]>=0`），所以 `panels` 进闸门之后这帧再也不被
 检查；要复现必须临时放行（本轮试过两次，都没提交）。放行后量到的布局是
