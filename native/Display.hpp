@@ -24,6 +24,12 @@ public:
     // already has the display's picture on the GPU still needs the captured bank
     // written, because the game reads it back as a texture.
     void captureOnly(NitroVideo&,std::span<const std::uint32_t> graphics3d);
+    // Stage B4: the one capture the renderer can make itself - the 3D source alone,
+    // the whole screen, at the start of a bank the LCDC shows. The bytes only have to
+    // reach VRAM if the game reads that region, so `deferCapture` records the request
+    // instead of writing it (NitroVideo::materialise does the rest).
+    bool captureDeferrable(NitroVideo&) const;
+    void deferCapture(NitroVideo&);
     std::span<const std::uint32_t> pixels() const {return screens_;}
     std::span<const std::uint32_t> mainGraphics() const {return graphics_;}
     std::span<const std::uint32_t> recipes() const {return recipes_;}

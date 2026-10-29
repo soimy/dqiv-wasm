@@ -278,10 +278,24 @@ GPU 已经合成好了，`display_.frame()`（`dr`+`dc` ≈ 3.5ms）就是白算
 并且要求 CPU 那份捕获里至少有 1000 个像素与首像素不同——否则"什么都没写"和"图里全是一个
 颜色"会一起通过。
 
-**还剩的一步**：让 `Display::capture` 在这条路上不写 VRAM、只登记（bank/偏移/尺寸），
-`NitroVideo` 的 `read`/`readTexture`/`lcdcSource` 真的碰到那段区域时才从 `capture_` 惰性
-读回一次。做完它，合成帧上的 `readNative`、`capture` 的 630µs 与那 128KB 的 bank 上传才会
-一起消失。
+**惰性回填也已经接上了。** `Display::captureDeferrable()` 认那条唯一的路：捕获源是 3D 独立源
+（`DISPCAPCNT` bit 29-30 为 0、bit 24 置位）、整屏 256×192、写在整个 bank 的开头、bank 正给
+LCDC 用。这种帧里 `Display::deferCapture()` 只登记区域并清 bit 31，`FramePresenter` 先用
+`capturePicture(nativeTexture())` 把图渲进捕获纹理。`NitroVideo` 记下这段"已写但字节还在 GPU"，
+并在这些东西碰到它时惰性回填：`read` / `readTexture` / `readDisplay` / `lcdcSource`（任何读），
+以及**写到同一区域**（先回填再覆盖，程序顺序不变）。同名区域的新捕获直接替换旧的、不触发回填——
+旧字节从来没有可被观察的机会，因为任何读都会先把旧的拉回来。
+
+自检 `lazy 0`：用假源（`0x1234+i`）登记一次，CPU 读 `0x06000000` 必须拿到这些字；同一区域再登记
+两次，回调一次都不能被调；然后往区域头写两个字节，回调必须恰好被调一次，读回来是"新写的头 +
+回填的身子"。这一步不需要 GPU 就能测，所以它不会因为显卡驱动而漏网。
+
+于是合成帧上省掉的现在是：`pres` 的一半（2.9MB 拷贝 + 上传）、`dr`、`dc`、`capture` 的
+256×192 循环、以及捕获 bank 那 128KB 的上传（不写 bank，stamp 不变，GPU 那边就不会收到它）。
+
+**还剩的一步**：`readNative` 本身。它现在还在跑，因为 `Display` 的剩下几个消费者（非合成帧的
+`engine()`、桌面端的即时读回路径）还要 CPU 像素。等这些帧也只剩 GPU 合成时，它才能整条去掉；
+那一步做完，城镇 profile 里 `readNative 1483` 也一起消失。
 
 **B5 收敛（1 天）**
 四场景逐像素回归、真机 fps、Windows CI 三绿。

@@ -122,6 +122,7 @@ public:
     unsigned captureTexture() const {return capture_.color;}
     // The captured screen, top-down 16-bit words (verification only).
     std::vector<std::uint16_t> readCapture();
+    void readCaptureInto(std::uint16_t*,std::size_t count);   // the same, into a caller's buffer
     // False until a whole frame has gone round, when that texture is uninitialised
     // and the CPU's copy of the same picture is still empty.
     bool nativePictureReady() const {return nativeFrames_>=2;}

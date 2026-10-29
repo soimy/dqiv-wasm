@@ -1,6 +1,8 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <span>
 #include <vector>
 namespace pc {
@@ -12,15 +14,24 @@ public:
     NitroVideo& operator=(const NitroVideo&)=delete;
     void* reg(std::uint32_t address,std::size_t width);
     void write(std::uint32_t address,std::span<const std::uint8_t>);
-    void read(std::uint32_t address,std::span<std::uint8_t>) const;
+    void read(std::uint32_t address,std::span<std::uint8_t>);
     // Stable backing for deferred copies of a captured LCDC image.
     void* lcdcSource(std::uint32_t address,std::size_t size);
-    void readTexture(bool palette,std::size_t offset,std::span<std::uint8_t>) const;
+    void readTexture(bool palette,std::size_t offset,std::span<std::uint8_t>);
     // Display engines see zero on unallocated VRAM; CPU transfers remain strict.
-    void readDisplay(std::uint32_t address,std::span<std::uint8_t>) const;
+    void readDisplay(std::uint32_t address,std::span<std::uint8_t>);
     void readExtendedPalette(bool sub,bool obj,std::span<std::uint8_t>) const;
     bool lcdcBank(unsigned bank) const;
     void capture(unsigned bank,unsigned offset,std::span<const std::uint16_t>);
+    // Stage B4: a capture the GPU has already made. The bank is logically written -
+    // the display shows it - but the bytes are fetched the first time anything reads
+    // that region, so a frame that never reads it back never pays for them. A new
+    // capture over the same region replaces it without fetching; a write to it, or
+    // any read, materialises first, so program order is kept.
+    void deferCapture(unsigned bank,unsigned offset,unsigned width,unsigned height);
+    void setCaptureSource(std::function<void(std::uint16_t*,std::size_t)>);
+    bool capturePending() const {return deferred_.has_value();}
+    void materialise();
     std::uint64_t revision() const {return revision_;}
     // Changes only when memory of a bank mapped for textures or texture palettes is written.
     std::uint64_t textureRevision() const {return textureRevision_;}
@@ -48,8 +59,12 @@ public:
 private:
     std::array<std::uint32_t,vramBlockCount> vramStamps_{};
     std::uint32_t stamp_=0,paletteStamp_=0,oamStamp_=0;
-    void stampVram(std::size_t offset,std::size_t size);
     struct Mapping {std::size_t offset,size;};
+    struct Deferred {unsigned bank=0,offset=0,width=0,height=0;};
+    std::optional<Deferred> deferred_;
+    std::function<void(std::uint16_t*,std::size_t)> captureSource_;
+    void stampVram(std::size_t offset,std::size_t size);
+    bool overlapsDeferred(std::size_t offset,std::size_t size) const;
     std::vector<Mapping> mappings(std::uint32_t) const;
     alignas(8) std::array<std::uint8_t,0x2000> registers_{};
     std::vector<std::uint8_t> vram_;

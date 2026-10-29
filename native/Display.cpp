@@ -417,6 +417,23 @@ void Display::frame(NitroVideo& video,std::span<const std::uint32_t> three,bool 
     }
     captureOnly(video,three);
 }
+bool Display::captureDeferrable(NitroVideo& video) const {
+    const unsigned cap=r32(video,0x04000064);
+    if(!(cap&0x80000000u))return false;
+    if((cap>>29)&3)return false;                        // source alone, not a blend
+    if(!(cap&(1u<<24)))return false;                    // and the 3D screen, not graphics
+    if(((cap>>20)&3)!=3)return false;                   // the whole screen
+    if(((cap>>18)&3)!=0)return false;                   // at the start of the bank
+    return video.lcdcBank((cap>>16)&3);
+}
+void Display::deferCapture(NitroVideo& video) {
+    const unsigned cap=r32(video,0x04000064),bank=(cap>>16)&3;
+    video.deferCapture(bank,0,256,192);
+    *static_cast<std::uint32_t*>(video.reg(0x04000064,4))=cap&0x7fffffff;
+    capturedThree_=(cap&(1u<<24))!=0;
+    capturedWhole_=(cap>>29&3)==0&&((cap>>20)&3)==3&&((cap>>18)&3)==0;
+    capturedBank_=bank;
+}
 void Display::captureOnly(NitroVideo& video,std::span<const std::uint32_t> three) {
     const bool mainTop=(r16(video,0x04000304)&0x8000)!=0;mainTop_=mainTop;
     ProfileScope timing("display-capture");

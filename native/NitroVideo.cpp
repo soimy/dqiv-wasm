@@ -68,6 +68,7 @@ void NitroVideo::write(std::uint32_t address,std::span<const std::uint8_t> sourc
         if(maps.empty())throw std::runtime_error("Write to unmapped video memory");
         auto size=source.size()-done;for(const auto& m:maps)size=std::min(size,m.size);
         for(const auto& m:maps) {
+            if(overlapsDeferred(m.offset,size))materialise();
             std::copy_n(source.data()+done,size,vram_.data()+m.offset);
             stampVram(m.offset,size);
             // Banks A-D hold texture images and E-G texture palettes in mode 3;
@@ -86,7 +87,8 @@ std::uint64_t NitroVideo::textureBanks() const {
     for(unsigned i=0;i<7;++i)result|=std::uint64_t(registers_[0x240+i])<<(i*8);
     return result;
 }
-void NitroVideo::readTexture(bool palette,std::size_t offset,std::span<std::uint8_t> dest) const {
+void NitroVideo::readTexture(bool palette,std::size_t offset,std::span<std::uint8_t> dest) {
+    materialise();
     const std::size_t capacity=palette?0x18000:0x80000;
     if(offset>capacity || dest.size()>capacity-offset)throw std::runtime_error("Texture memory read outside logical range");
     std::fill(dest.begin(),dest.end(),std::uint8_t{0});
@@ -100,7 +102,8 @@ void NitroVideo::readTexture(bool palette,std::size_t offset,std::span<std::uint
         for(auto i=begin;i<end;++i)dest[i-offset]|=vram_[physical[bank]+i-base];
     }
 }
-void NitroVideo::read(std::uint32_t address,std::span<std::uint8_t> dest) const {
+void NitroVideo::read(std::uint32_t address,std::span<std::uint8_t> dest) {
+    materialise();
     if(dest.empty())return;
     auto simple=[&](const auto& source,unsigned base) {
         const auto offset=address-base;
@@ -119,7 +122,8 @@ void NitroVideo::read(std::uint32_t address,std::span<std::uint8_t> dest) const 
         done+=size;
     }
 }
-void NitroVideo::readDisplay(std::uint32_t address,std::span<std::uint8_t> dest) const {
+void NitroVideo::readDisplay(std::uint32_t address,std::span<std::uint8_t> dest) {
+    materialise();
     for(std::size_t done=0;done<dest.size();) {
         const auto addr=address+static_cast<unsigned>(done);
         const auto size=std::min(dest.size()-done,std::size_t(0x4000-(addr&0x3fff)));
@@ -154,6 +158,7 @@ void NitroVideo::readExtendedPalette(bool sub,bool obj,std::span<std::uint8_t> d
 }
 bool NitroVideo::lcdcBank(unsigned bank) const {return bank<4 && (registers_[0x240+bank]&0x87)==0x80;}
 void* NitroVideo::lcdcSource(std::uint32_t address,std::size_t size) {
+    materialise();
     const auto offset=address-0x06800000u;
     if(offset>=vram_.size() || size>vram_.size()-offset)
         throw std::runtime_error("LCDC source outside video memory");
@@ -195,6 +200,36 @@ std::array<std::int32_t,4> NitroVideo::vramWindowBases(bool sub,bool objects,std
     }
     return bases;
 }
+void NitroVideo::setCaptureSource(std::function<void(std::uint16_t*,std::size_t)> source) {
+    captureSource_=std::move(source);
+}
+bool NitroVideo::overlapsDeferred(std::size_t offset,std::size_t size) const {
+    if(!deferred_||!size)return false;
+    const std::size_t begin=std::size_t(deferred_->bank)*0x20000+(deferred_->offset&0x1ffff);
+    const std::size_t end=begin+std::size_t(deferred_->width)*deferred_->height*2;
+    return offset<end&&begin<offset+size;
+}
+void NitroVideo::deferCapture(unsigned bank,unsigned offset,unsigned width,unsigned height) {
+    if(!width||!height)return;
+    // A capture over the same region replaces the pending one: its bytes were never
+    // observable (any read would have materialised it), so nothing is fetched here.
+    if(!deferred_||deferred_->bank!=bank||deferred_->offset!=offset||
+       deferred_->width!=width||deferred_->height!=height) materialise();
+    deferred_=Deferred{bank,offset,width,height};
+}
+void NitroVideo::materialise() {
+    if(!deferred_)return;
+    const auto done=*deferred_;deferred_.reset();
+    std::vector<std::uint16_t> pixels(std::size_t(done.width)*done.height,0);
+    if(captureSource_)captureSource_(pixels.data(),pixels.size());
+    const std::size_t begin=std::size_t(done.bank)*0x20000+(done.offset&0x1ffff);
+    for(std::size_t i=0;i<pixels.size();++i) {
+        const auto p=begin+((done.offset+i*2)&0x1ffff)-(done.offset&0x1ffff);
+        vram_[p]=static_cast<std::uint8_t>(pixels[i]);vram_[p+1]=static_cast<std::uint8_t>(pixels[i]>>8);
+    }
+    if(!pixels.empty())stampVram(begin,pixels.size()*2);
+    revision_=++nextRevision;
+}
 void NitroVideo::stampVram(std::size_t offset,std::size_t size) {
     if(!size)return;
     const std::uint32_t stamp=++stamp_;
@@ -203,6 +238,7 @@ void NitroVideo::stampVram(std::size_t offset,std::size_t size) {
 }
 void NitroVideo::capture(unsigned bank,unsigned offset,std::span<const std::uint16_t> pixels) {
     if(!lcdcBank(bank))return;
+    if(overlapsDeferred(bank*0x20000+(offset&0x1ffff),pixels.size()*2))materialise();
     for(std::size_t i=0;i<pixels.size();++i) {
         const auto p=bank*0x20000+((offset+i*2)&0x1ffff);
         vram_[p]=static_cast<std::uint8_t>(pixels[i]);vram_[p+1]=static_cast<std::uint8_t>(pixels[i]>>8);

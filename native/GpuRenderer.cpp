@@ -1502,6 +1502,10 @@ std::vector<std::uint16_t> GpuRenderer::readCapture() {
     }
     return words;
 }
+void GpuRenderer::readCaptureInto(std::uint16_t* out,std::size_t count) {
+    const auto words=readCapture();
+    std::copy_n(words.begin(),std::min(count,words.size()),out);
+}
 void GpuRenderer::takeNative(std::vector<std::uint32_t>& pixels) {
     if(diag::skipReadback)return;
     ProfileScope timing("readNative");

@@ -744,7 +744,7 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         // byte, which blend against what is below. The texture holds the picture
         // as the 3D target does - premultiplied - and Display gets the straight
         // version of it, which is what the readback hands over.
-        unsigned threeRun=256u*192u,backdropRun=256u*192u,backdropOffRun=256u*192u,captureDiff=256u*192u;
+        unsigned threeRun=256u*192u,backdropRun=256u*192u,backdropOffRun=256u*192u,captureDiff=256u*192u,lazyDiff=256u*192u;
         {
             std::vector<std::uint32_t> premultiplied(std::size_t(256)*192),picture(premultiplied.size()),flipped(premultiplied.size());
             const auto straightFrom=[](std::uint32_t p) {
@@ -845,8 +845,46 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
                     if(i==0)first=value;
                     else if(value!=first)++differing;
                 }
-                if(differing<1000)captureDiff=256u*192u;
+                if(differing<1000)captureDiff=256u*192u,lazyDiff=256u*192u;
                 *reg32(0x04000064)=0;
+                *bankA=bankWas;
+            }
+            // --- a captured bank that is only fetched when read (B4) ---------------
+            // The capture the renderer made stays on the GPU until the game reads that
+            // VRAM; then the bytes appear. Nothing is fetched for a capture that a
+            // later one replaces, and a write over the region lands after the fetch,
+            // never before. All of it without the GPU: a painted source stands in.
+            {
+                const unsigned bankWas=*bankA;
+                *bankA=0x80;   // captured into the bank, as Display::capture needs it
+                video.setCaptureSource([](std::uint16_t* pixels,std::size_t count) {
+                    for(std::size_t i=0;i<count;++i)pixels[i]=static_cast<std::uint16_t>(0x1234u+unsigned(i));
+                });
+                video.deferCapture(0,0,256,192);
+                *bankA=0x81;   // the CPU's view of it: the read below is what fetches it
+                std::vector<std::uint8_t> got(std::size_t(256)*192*2);
+                video.read(0x06000000,got);
+                lazyDiff=0;
+                for(std::size_t i=0;i<std::size_t(256)*192;++i) {
+                    const auto want=static_cast<std::uint16_t>(0x1234u+unsigned(i));
+                    const auto have=static_cast<std::uint16_t>(got[i*2]|(got[i*2+1]<<8));
+                    if(have!=want&&lazyDiff++<3)
+                        std::printf("  gpu capture lazy: %zu have %04x want %04x\n",i,have,want);
+                }
+                unsigned calls=0;
+                video.setCaptureSource([&calls](std::uint16_t* pixels,std::size_t count) {
+                    ++calls;for(std::size_t i=0;i<count;++i)pixels[i]=0x4321u;
+                });
+                video.deferCapture(0,0,256,192);
+                video.deferCapture(0,0,256,192);   // same region: replaced, not fetched
+                if(calls!=0)lazyDiff=256u*192u;
+                const std::array<std::uint8_t,2> patch{0xaa,0xbb};
+                video.write(0x06000000,patch);     // overlaps it: the fetch comes first
+                if(calls!=1)lazyDiff=256u*192u;
+                std::vector<std::uint8_t> after(4);
+                video.read(0x06000000,after);
+                if((after[0]|(after[1]<<8))!=0xbbaa||(after[2]|(after[3]<<8))!=0x4321)
+                    lazyDiff=256u*192u;
                 *bankA=bankWas;
             }
             gl::DeleteTextures(1,&texture3d);
@@ -858,10 +896,10 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
             &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0
-            &&canvasDiff==0&&graphicsDiff==0&&captureDiff==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u, capture %u)\n",
+            &&canvasDiff==0&&graphicsDiff==0&&captureDiff==0&&lazyDiff==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u, capture %u, lazy %u)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff,captureDiff);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff,captureDiff,lazyDiff);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;

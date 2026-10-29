@@ -260,6 +260,20 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());
         }
     }
+    // B4: a capture that is this screen's 3D picture alone, whole, at the start of
+    // the bank the display shows needs no CPU loop at all - the renderer makes it,
+    // and the bank's bytes are fetched only if the game reads them. The source
+    // callback outlives neither of the two objects it uses (both belong to the
+    // window), and every read of that VRAM region goes through materialise().
+    bool captureDeferred=false;
+    if(screens&&!probing&&window_.gpu().nativePictureReady()&&display_.captureDeferrable(video)) {
+        window_.gpu().capturePicture(window_.gpu().nativeTexture());
+        video.setCaptureSource([this](std::uint16_t* pixels,std::size_t count) {
+            window_.gpu().readCaptureInto(pixels,count);
+        });
+        display_.deferCapture(video);
+        captureDeferred=true;
+    }
     // A frame the canvas takes from the GPU does not need Display's composition:
     // it is the same picture, built on the GPU instead. What it still needs is the
     // capture unit, because the game reads the captured bank back as a texture -
@@ -267,7 +281,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // its pixels from the composition itself, so those frames keep it.
     const unsigned captureNow=*static_cast<unsigned*>(video.reg(0x04000064,4));
     const bool captureFrom3d=!(captureNow&0x80000000u)||(captureNow&(1u<<24))!=0;
-    if(screens&&!probing&&captureFrom3d)display_.captureOnly(video,native3d_);
+    if(captureDeferred) {}   // made above, and its bytes only if someone reads them
+    else if(screens&&!probing&&captureFrom3d)display_.captureOnly(video,native3d_);
     else display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
     if(probing)probeComposition(video,mainTop,mode);
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
