@@ -116,6 +116,12 @@ public:
     // can show it where display mode 2 shows its capture instead of the VRAM the
     // capture was written into (stage B2d).
     unsigned nativeTexture() const {return native_[nativeSlot_^1].color;}
+    // Stage B4: the framebuffer's capture of that picture, as the two bytes a
+    // captured VRAM bank holds (15-bit colour, bit 15 = the pixel was opaque).
+    void capturePicture(unsigned picture);
+    unsigned captureTexture() const {return capture_.color;}
+    // The captured screen, top-down 16-bit words (verification only).
+    std::vector<std::uint16_t> readCapture();
     // False until a whole frame has gone round, when that texture is uninitialised
     // and the CPU's copy of the same picture is still empty.
     bool nativePictureReady() const {return nativeFrames_>=2;}
@@ -196,7 +202,7 @@ private:
     // Textures uploaded without upscaling, waiting to be upscaled.
     struct Upgrade {std::uint64_t key;Texture texture;std::uint64_t hash;};
     std::vector<Upgrade> upgrades_;
-    unsigned program_=0,fogProgram_=0,composeProgram_=0,reduceProgram_=0,overlayProgram_=0;
+    unsigned program_=0,fogProgram_=0,composeProgram_=0,reduceProgram_=0,captureProgram_=0,overlayProgram_=0;
     struct OverlayPicture {unsigned name=0;int width=0,height=0;};
     std::unordered_map<unsigned,OverlayPicture> overlays_;
     unsigned vertexArray_=0,vertexBuffer_=0,emptyArray_=0;
@@ -207,7 +213,7 @@ private:
     std::array<std::uint32_t,NitroVideo::vramBlockCount> vramSeen_{};
     std::uint32_t paletteSeen_=0,oamSeen_=0;
     unsigned hdAtlas_=0; // HdPictures cells, upscaled and premultiplied
-    Target scene_[2],native_[2],output_,fogged_[2],world_;
+    Target scene_[2],native_[2],capture_,output_,fogged_[2],world_;
     unsigned lastSlot_=0,readBuffers_[2]{};
     bool readPending_[2]{},fogApplied_[2]{};
     bool nativeDrawn_=false;   // the 3D screen is in native_ and can be read a frame later

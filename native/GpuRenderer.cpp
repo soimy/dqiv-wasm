@@ -221,6 +221,29 @@ void main() {
     for(int y=0;y<4;++y) for(int x=0;x<4;++x) sum+=texture(uSource,(origin+(vec2(x,y)+0.5)*uScale/4.0)/vec2(textureSize(uSource,0)));
     oColor=sum/16.0;
 })";
+// The capture unit's output for one screen, stage B4: the picture quantised the
+// way Display::capture stores it in VRAM - five bits a channel, plus the alpha bit
+// that says the pixel was opaque - and laid out as the two bytes NitroVideo::capture
+// writes. Reading it back is one transfer instead of a per-pixel loop in the frame.
+const char* captureFragment=DQIV_GLSL_HEADER R"(
+precision highp float;
+in vec2 vPosition;
+out vec4 oColor;
+uniform sampler2D uPicture;   // the screen's reduced 3D picture, premultiplied, rows bottom-up
+void main() {
+    // Both pictures are bottom-up, so the screen row needs no flip here.
+    ivec2 p=ivec2(int(vPosition.x*256.0),int(vPosition.y*192.0));
+    vec4 t=texelFetch(uPicture,p,0);
+    uint r=uint(t.r*255.0+0.5),g=uint(t.g*255.0+0.5),b=uint(t.b*255.0+0.5),a=uint(t.a*255.0+0.5);
+    // Back to straight colour exactly as GpuRenderer::unpremultiplyNative does.
+    uint k=a==0u?0u:(255u*65536u+a/2u)/a;
+    r=min(255u,(r*k+32768u)>>16);g=min(255u,(g*k+32768u)>>16);b=min(255u,(b*k+32768u)>>16);
+    // Display::color15, then its alpha bit.
+    uint c=(r<<16)|(g<<8)|b;
+    uint v=((c>>19)&31u)|((c>>6)&0x3e0u)|((c<<7)&0x7c00u);
+    if(a!=0u)v|=0x8000u;
+    oColor=vec4(float(v&255u)/255.0,float(v>>8)/255.0,0.0,1.0);
+})";
 // Final picture: per-pixel DS composition recipes (see Display) applied to
 // the high-resolution 3D layer, then master brightness.
 const char* composeFragment=DQIV_GLSL_HEADER R"(
@@ -804,6 +827,7 @@ GpuRenderer::GpuRenderer() {
     composeProgram_=link(fullscreenVertex,composeFragment);
     compose2dProgram_=link(fullscreenVertex,compose2dFragment);
     reduceProgram_=link(fullscreenVertex,reduceFragment);
+    captureProgram_=link(fullscreenVertex,captureFragment);
     overlayProgram_=link(overlayVertex,overlayFragment);
     gl::GenVertexArrays(1,&vertexArray_);gl::GenVertexArrays(1,&emptyArray_);gl::GenBuffers(1,&vertexBuffer_);
     gl::BindVertexArray(vertexArray_);gl::BindBuffer(GL_ARRAY_BUFFER,vertexBuffer_);
@@ -841,7 +865,7 @@ GpuRenderer::~GpuRenderer() {
     gl::DeleteQueries(4,frameQueries_);
     gl::DeleteTextures(4,recipeTextures_);gl::DeleteTextures(1,&sideColumns_);gl::DeleteTextures(1,&hdAtlas_);
     gl::DeleteBuffers(1,&vertexBuffer_);gl::DeleteVertexArrays(1,&vertexArray_);gl::DeleteVertexArrays(1,&emptyArray_);
-    for(auto program:{program_,fogProgram_,composeProgram_,reduceProgram_,overlayProgram_})gl::DeleteProgram(program);
+    for(auto program:{program_,fogProgram_,composeProgram_,reduceProgram_,captureProgram_,overlayProgram_})gl::DeleteProgram(program);
     for(auto& [id,picture]:overlays_)gl::DeleteTextures(1,&picture.name);
 }
 void GpuRenderer::drawOverlay(unsigned id,std::span<const std::uint32_t> pixels,int width,int height,bool changed,
@@ -1448,6 +1472,35 @@ void GpuRenderer::queueNative(const std::array<float,4>& source) {
     DQIV_TRACE("readNative draw");
     nativeDrawn_=true;   // the next frame takes it, before queuing its own scene
     ++nativeFrames_;
+}
+void GpuRenderer::capturePicture(unsigned picture) {
+    if(!picture)return;
+    ProfileScope timing("capture-gpu");
+    resize(capture_,256,192,false,false);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,capture_.framebuffer);gl::Viewport(0,0,256,192);
+    gl::Disable(GL_BLEND);gl::Disable(GL_DEPTH_TEST);gl::Disable(GL_SCISSOR_TEST);
+    gl::ColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    gl::UseProgram(captureProgram_);gl::BindVertexArray(emptyArray_);
+    gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,picture);
+    gl::Uniform1i(uniform(captureProgram_,"uPicture"),0);
+    gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
+    gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,0);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+}
+std::vector<std::uint16_t> GpuRenderer::readCapture() {
+    std::vector<std::uint16_t> words(std::size_t(256)*192);
+    if(!capture_.framebuffer)return words;
+    std::vector<std::uint8_t> raw(std::size_t(256)*192*4);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,capture_.framebuffer);
+    gl::PixelStorei(GL_PACK_ALIGNMENT,4);
+    gl::ReadPixels(0,0,256,192,GL_RGBA,GL_UNSIGNED_BYTE,raw.data());
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+    // R and G carry the word's two bytes; rows come back bottom-up.
+    for(int y=0;y<192;++y)for(int x=0;x<256;++x) {
+        const auto* p=raw.data()+(std::size_t(191-y)*256+x)*4;
+        words[std::size_t(y)*256+x]=static_cast<std::uint16_t>(p[0]|(p[1]<<8));
+    }
+    return words;
 }
 void GpuRenderer::takeNative(std::vector<std::uint32_t>& pixels) {
     if(diag::skipReadback)return;

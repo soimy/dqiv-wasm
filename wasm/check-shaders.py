@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate the renderer's shaders against both GLSL profiles it targets.
 
-The eight shaders in native/GpuRenderer.cpp share one source and only the
+The nine shaders in native/GpuRenderer.cpp share one source and only the
 version line diverges, so this pulls each body out of the C++ source text and
 compiles it twice: once as GLSL ES 3.00 (what a wasm build gets) and once as
 desktop GLSL 330 core (what Windows gets). Both have to pass.
@@ -29,8 +29,8 @@ if len(headers)!=2:
     sys.exit(f"expected the two DQIV_GLSL_HEADER definitions in {SOURCE}, found {len(headers)}")
 ES_HEADER,DESKTOP_HEADER=[h.encode().decode("unicode_escape") for h in headers]
 matches=re.findall(r'const char\* (\w+)=DQIV_GLSL_HEADER R"\((.*?)\)";',text,re.S)
-if len(matches)!=9:
-    sys.exit(f"expected 9 shaders in {SOURCE}, found {len(matches)}")
+if len(matches)!=10:
+    sys.exit(f"expected 10 shaders in {SOURCE}, found {len(matches)}")
 
 names=[m[0] for m in matches]
 print(f"found {len(matches)} shaders: {', '.join(names)}\n")

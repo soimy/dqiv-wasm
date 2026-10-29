@@ -267,6 +267,22 @@ GPU 已经合成好了，`display_.frame()`（`dr`+`dc` ≈ 3.5ms）就是白算
 的判断。探针的 diff 另外跳过捕获直通的帧：那条路采样的是本帧的图，而 Display 读的 bank 里是
 上一帧捕获的，两者本来就不该相等。
 
+**B4 的后半，第一步也已经落地：捕获本身上了 GPU。** 新增第 10 个着色器 `captureFragment`：
+读那张 256×192 的 3D 缩略图（预乘、行从下往上），按 `unpremultiplyNative` 的倒数表反预乘、
+按 `Display::color15` 取五位、源 alpha 非零就置位 15，输出成 VRAM 里那两个字节
+（小端）。`capturePicture(picture)` 画进 `capture_`，`readCapture()` 只是把结果读回来
+（自检用）。
+
+自检 `capture 0`：同一帧里先让 `Display::capture` 用 CPU 写进 bank A（显示模式 2 + 捕获
+开、3D 源、整屏、无偏移），再让 GPU 采同一张缩略图画一份，逐字比对 49152 个 16 位字；
+并且要求 CPU 那份捕获里至少有 1000 个像素与首像素不同——否则"什么都没写"和"图里全是一个
+颜色"会一起通过。
+
+**还剩的一步**：让 `Display::capture` 在这条路上不写 VRAM、只登记（bank/偏移/尺寸），
+`NitroVideo` 的 `read`/`readTexture`/`lcdcSource` 真的碰到那段区域时才从 `capture_` 惰性
+读回一次。做完它，合成帧上的 `readNative`、`capture` 的 630µs 与那 128KB 的 bank 上传才会
+一起消失。
+
 **B5 收敛（1 天）**
 四场景逐像素回归、真机 fps、Windows CI 三绿。
 

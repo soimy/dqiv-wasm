@@ -744,7 +744,7 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         // byte, which blend against what is below. The texture holds the picture
         // as the 3D target does - premultiplied - and Display gets the straight
         // version of it, which is what the readback hands over.
-        unsigned threeRun=256u*192u,backdropRun=256u*192u,backdropOffRun=256u*192u;
+        unsigned threeRun=256u*192u,backdropRun=256u*192u,backdropOffRun=256u*192u,captureDiff=256u*192u;
         {
             std::vector<std::uint32_t> premultiplied(std::size_t(256)*192),picture(premultiplied.size()),flipped(premultiplied.size());
             const auto straightFrom=[](std::uint32_t p) {
@@ -814,6 +814,41 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
                 backdropRun=off==0?different:256u*192u;
                 backdropOffRun=off;
             }
+            // --- the capture unit on the GPU (B4) -------------------------------
+            // Display::capture's per-pixel loop is what still runs on the CPU for a
+            // captured frame. The GPU writes the same two bytes: the picture quantised
+            // to five bits a channel plus its alpha bit, in VRAM's little-endian order.
+            // The comparison is against the CPU's own capture of the same picture.
+            {
+                const unsigned bankWas=*bankA;
+                *bankA=0x80;   // the bank goes to the LCDC, so the capture payload lands
+                *control=0x00020000u;   // display mode 2: the screen is that bank
+                *reg32(0x04000064)=0x80000000u|(1u<<24)|(3u<<20);   // 3D source, whole screen, bank A, no offset
+                {
+                    Display reference;
+                    reference.frame(video,picture,true);
+                }
+                const auto vram=video.physicalVram();
+                window.gpu().capturePicture(texture3d);
+                const auto words=window.gpu().readCapture();
+                captureDiff=0;
+                for(std::size_t i=0;i<words.size();++i) {
+                    const auto want=std::uint16_t(vram[i*2]|(vram[i*2+1]<<8));
+                    if(words[i]!=want&&captureDiff++<3)
+                        std::printf("  gpu capture: %zu gpu %04x cpu %04x\n",i,words[i],want);
+                }
+                // A capture that wrote nothing would compare equal to a picture with no
+                // colour in it: require the CPU's capture to hold more than one value.
+                std::uint16_t first=0xffffu;unsigned differing=0;
+                for(std::size_t i=0;i<words.size();++i) {
+                    const auto value=std::uint16_t(vram[i*2]|(vram[i*2+1]<<8));
+                    if(i==0)first=value;
+                    else if(value!=first)++differing;
+                }
+                if(differing<1000)captureDiff=256u*192u;
+                *reg32(0x04000064)=0;
+                *bankA=bankWas;
+            }
             gl::DeleteTextures(1,&texture3d);
             *hofs=hofsBefore;
         }
@@ -823,10 +858,10 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
             &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0
-            &&canvasDiff==0&&graphicsDiff==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u)\n",
+            &&canvasDiff==0&&graphicsDiff==0&&captureDiff==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u, capture %u)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff,captureDiff);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;
