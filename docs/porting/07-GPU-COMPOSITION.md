@@ -419,7 +419,24 @@ plane 0 逐像素比，并按 plane 0 的 alpha（recipe 的 kind）分类。结
 这把问题定性了：**合成器的 2D 合成是对的，面板布局的残差是 3D 层分辨率**，与
 "battle 的 backdrop 3D 在合成屏里是 256×192 缩略图"同一类**故意差异**。因此要让 `panels`
 进闸门，应先让 check 只统计 kind=0 的 2D 像素（或在 3D kind 上允许采样差），而不是继续
-追 2D 层的"少画一层"——那条线已经排除。### 真机验收怎么做
+追 2D 层的"少画一层"——那条线已经排除。
+
+**本机已经量到的验收数字（2026-10-30，headless Chrome + SwiftShader，DQ4eu.nds）**
+
+```
+?gpucompose=1     标题画面：compose use: 120/240 frames presented from the composed screens
+                  （面板布局的 split 帧；此前这里一帧都不合成）
+?gpucompose=check graphics check: screen 0, 0 of 0 2D pixels differ   （该帧整屏是 3D）
+                  compose check: 14975 of 354564 differ, worst step 255, box 43,163..693,283
+                  （4.2%，全部落在 3D 层的字形边缘，见上）
+selfcheck         固定行不变：graphics 0 / canvas 0 of 196608 / capture 0 / lazy 0
+```
+
+`?gpucompose=check` 的整画面差异仍是 4.2%，但那是**已知且故意的 3D 采样差**；2D 部分在新加的
+`graphics check` 行里单独比对。面板布局 2D 的"有内容"样本要等城镇（当前 unattended 跑进不到
+城镇，需要输入）。
+
+### 真机验收怎么做
 
 1. **先看覆盖**：`?gpucompose=probe` 跑城镇、战斗、菜单、标题各一分钟。每 120 帧一行：
 
