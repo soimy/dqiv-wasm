@@ -326,6 +326,11 @@ compose use: 240 frames presented from the composed screens   （?gpucompose=1�
 截图的动画时刻不同，但背景/文字/位置都对）。SwiftShader 下 `RAF 36 Hz`（GPU 软件光栅化是墙），
 真机 fps 仍然只能在设备上看。
 
+标题之后还有两段（长时间 unattended 跑就能看到）：演职员表是 **`effect`**（每屏用捕获图
+当纹理铺满整宽，带 sides），再往后是 **`joined`**。`?gpucompose=1` 会以
+`compose use: not composed, sides` / `layout` 说明为什么那一段没接——现在只有 `single` 与
+`split` 在合成，其余都回退，所以"合成帧数"会在 240 帧之后停住。这不是 bug，是覆盖边界。
+
 ### 真机验收怎么做
 
 1. **先看覆盖**：`?gpucompose=probe` 跑城镇、战斗、菜单、标题各一分钟。每 120 帧一行：

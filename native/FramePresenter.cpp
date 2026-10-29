@@ -227,14 +227,21 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     const bool probing=diag::composeProbe||diag::composeDiff;
     // Stage B3 (?gpucompose=1): where the canvas shows a picture the compositor can
     // build - the display engine's own output (single), or the layers before its
-    // display mode picks a source (split, the town's two-screen 3D frames) - it
+    // display mode picks a source (split and joined, the two-screen 3D frames) - it
     // takes the two composed screens, and the recipes (four planes of 256 x 704,
     // 2.9 MB a frame) are neither built nor uploaded. Slots 2 and 3 are the DS top
     // and bottom screens as the canvas draws them. A frame that falls back keeps the
     // whole recipe path.
     bool screens=false;
-    if(diag::composeUse&&!pc::hdPicturesLoaded()&&!layout_.sides&&!layout_.band&&
-        layout_.inset[2]<=0&&(mode==Mode::single||mode==Mode::split)) {
+    // Why a frame the canvas could have taken did not: "composed nothing" and
+    // "composed 240 frames and stopped" look the same from outside otherwise.
+    const char* screenReason="";
+    if(pc::hdPicturesLoaded())screenReason="hd pictures";
+    else if(layout_.sides)screenReason="sides";
+    else if(layout_.band)screenReason="band";
+    else if(layout_.inset[2]>0)screenReason="inset";
+    else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
+    if(diag::composeUse&&!*screenReason) {
         const bool ready=window_.gpu().nativePictureReady();
         const unsigned picture=ready?window_.gpu().nativeTexture():0;
         const bool capture=ready&&display_.showsThreeCapture(video);
@@ -247,9 +254,9 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
                     mainTop?3:2);
             if(screens)layout_.composed={2,3};
         } else {
-            // Split shows the main engine's graphics one DS screen at a time, and the
-            // other screen keeps the picture it had when the engine was there (the
-            // same bookkeeping as screenRecipes_ below, which this replaces).
+            // Split and joined show the main engine's graphics one DS screen at a time,
+            // and the other screen keeps the picture it had when the engine was there
+            // (the same bookkeeping as screenRecipes_ below, which this replaces).
             const int slot=2+screen;
             screens=window_.gpu().composeScreen(video,false,display_,why,picture,false,false,true,slot);
             if(screens)layout_.composed={seen_[0]?2:slot,seen_[1]?3:slot};
@@ -260,10 +267,11 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             if(++composedFrames_%120==0)std::printf("compose use: %u frames presented from the composed screens\n",
                 composedFrames_);
         }
-        else {
-            static unsigned fellBack=0;
-            if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());
-        }
+        else screenReason=why.c_str();
+    }
+    if(diag::composeUse&&!screens) {
+        static unsigned skipped=0;
+        if(++skipped%120==1)std::printf("compose use: not composed, %s\n",*screenReason?screenReason:"?");
     }
     // B4: a capture that is this screen's 3D picture alone, whole, at the start of
     // the bank the display shows needs no CPU loop at all - the renderer makes it,
