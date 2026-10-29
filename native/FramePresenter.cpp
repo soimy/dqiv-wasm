@@ -254,7 +254,12 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             screens=window_.gpu().composeScreen(video,false,display_,why,picture,false,false,true,slot);
             if(screens)layout_.composed={seen_[0]?2:slot,seen_[1]?3:slot};
         }
-        if(screens)++composedFrames_;
+        if(screens) {
+            // The acceptance number: frames whose picture the canvas took from the
+            // compositor. One line every 120 of them.
+            if(++composedFrames_%120==0)std::printf("compose use: %u frames presented from the composed screens\n",
+                composedFrames_);
+        }
         else {
             static unsigned fellBack=0;
             if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());

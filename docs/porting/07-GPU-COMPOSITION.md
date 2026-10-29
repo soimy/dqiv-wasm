@@ -305,7 +305,28 @@ GPU。`takeNative`（wasm 上就是每帧那 ~1.5ms 的 `glReadPixels`）现在�
 **B5 收敛（1 天）**
 四场景逐像素回归、真机 fps、Windows CI 三绿。
 
-### 真机验收怎么做（本机没有 ROM，这几步只能在设备上做）
+### 本机能跑的那一半（2026-10-29 补记）
+
+`ROMandOBBfileHere/` 里本来就有 ROM（`DQ4eu.nds` 等），headless Chrome 也能带 ROM 跑，
+所以"本机没有 ROM"这个前提不成立：`node tools/selfcheck-ci.mjs --rom <nds> --url ...` 会走完
+加载器、进真的游戏帧，journal 里就有 `compose probe:` / `compose use:` 两种行。标题画面实测：
+
+```
+compose probe: 240 frames, split, screens 0, main ok 239 [windows 1],
+               sub ok 1 [affine bitmap background 120] [bitmap sprites 119]
+compose use: 240 frames presented from the composed screens   （?gpucompose=1，1 帧回退 "windows"）
+```
+
+两件事就此落定：城镇那类帧确实是 **split**（B3 的图形变体不是备选而是主路）；主引擎在
+标题画面 239/240 帧可合成，剩下 1 帧是窗口（`composeSupported` 拒绝），而**子引擎**用的是
+仿射位图 BG 与位图精灵（标题动画），这两种都还没做——split 只合成主引擎，所以不影响，
+但若哪一帧是 `single`，它会整帧回退。
+
+`?gpucompose=1` 与 `?gpucompose=0` 的截图逐像素比：画面一致（标题的演职员表在滚动，两次
+截图的动画时刻不同，但背景/文字/位置都对）。SwiftShader 下 `RAF 36 Hz`（GPU 软件光栅化是墙），
+真机 fps 仍然只能在设备上看。
+
+### 真机验收怎么做
 
 1. **先看覆盖**：`?gpucompose=probe` 跑城镇、战斗、菜单、标题各一分钟。每 120 帧一行：
 
