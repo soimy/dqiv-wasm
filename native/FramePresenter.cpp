@@ -244,6 +244,9 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
     // composed path recomputes the current one and does not match (docs/porting/07).
     else if(layout_.placed)screenReason="panels";
+    // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
+    // composed path recomputes the current one and does not match (docs/porting/07).
+
 
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
     if(diag::composeUse&&!*screenReason) {
@@ -471,6 +474,16 @@ void FramePresenter::present() {
             }
         }
     } else different=std::size_t(-1);
+    {
+        // What the compositor actually put in each slot, coarsely, and what the
+        // recipes' plane 0 holds where the canvas draws the screens.
+        for(int slot=0;slot<4;++slot) {
+            const auto pixels=window_.gpu().readScreenSlot(slot);
+            unsigned long long sum=0;
+            for(const auto p:pixels)sum+=((p>>16)&255)+((p>>8)&255)+(p&255);
+            std::printf("compose check slot %d mean %llu\n",slot,sum/(pixels.size()*3));
+        }
+    }
     std::printf("compose check layout: canvas %.0fx%.0f placed %d screens [%.0f,%.0f %.0fx%.0f] [%.0f,%.0f %.0fx%.0f] composed %d,%d\n",
         layout_.canvasWidth,layout_.canvasHeight,layout_.placed?1:0,
         layout_.screens[0][0],layout_.screens[0][1],layout_.screens[0][2],layout_.screens[0][3],

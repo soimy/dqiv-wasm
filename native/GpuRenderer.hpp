@@ -172,6 +172,7 @@ public:
     unsigned screenTexture(bool sub) const {return screens_[sub?1:0].color;}
     // The composed screen, top-down ARGB (verification only).
     std::vector<std::uint32_t> readScreen(bool sub);
+    std::vector<std::uint32_t> readScreenSlot(int slot);   // any of the four targets
     unsigned vramTexture() const {return sourceVram_;}
     unsigned paletteTexture() const {return sourcePalette_;}
     unsigned oamTexture() const {return sourceOam_;}

@@ -347,6 +347,15 @@ screens [0,64 341x256] [341,64 341x256] composed 2,3`，两张 64×32 缩略图�
 是把 `seen_[s]`/`screenRecipes_[s]` 的语义搬到纹理（切屏时冻结，而不是每帧重算），再用
 `?gpucompose=check` 量到个位数步进、才允许 `panels` 重新进闸门。
 
+再往下量了一层，根因不在"每屏记忆"：check 里加打印四个槽的平均亮度后是
+`slot 0 mean 85 / slot 1 mean 85 / slot 2 mean 2 / slot 3 mean 8`——**合成出来的屏就是黑的**，
+而 CPU 那边 recipe 是亮的。槽 0/1（引擎自己的图）是启动自检留下的，2/3 才是当帧合成结果。
+也就是说，面板这几帧（`single` + 显示模式 2）里 `composeScreen` 产出的画面与
+`display_.recipes()` 不一致；而这正是 B4 惰性捕获带来的耦合：捕获被推迟时 VRAM 里是旧 bank，
+`composeScreen` 的模式 2 路径如果落到"读 bank"就会读到黑。临时把"可推迟捕获"也当成直通
+（用图而不是 bank）并重编，槽 2/3 仍是 2/8，说明还有第二处；把两处试探都回退，只保留
+`readScreenSlot` 与槽均值打印（只在 check 模式跑），作为下一步的入口。
+
 ### 真机验收怎么做
 
 1. **先看覆盖**：`?gpucompose=probe` 跑城镇、战斗、菜单、标题各一分钟。每 120 帧一行：

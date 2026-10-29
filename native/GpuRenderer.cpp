@@ -1798,6 +1798,18 @@ std::vector<std::uint32_t> GpuRenderer::readScreen(bool sub) {
     }
     return pixels;
 }
+std::vector<std::uint32_t> GpuRenderer::readScreenSlot(int slot) {
+    if(slot<0||slot>3)return std::vector<std::uint32_t>(std::size_t(256)*192);
+    const auto& target=screens_[slot];
+    std::vector<std::uint32_t> raw(std::size_t(256)*192),pixels(raw.size());
+    if(!target.framebuffer)return pixels;
+    gl::BindFramebuffer(GL_FRAMEBUFFER,target.framebuffer);gl::PixelStorei(GL_PACK_ALIGNMENT,4);
+    gl::ReadPixels(0,0,256,192,GL_RGBA,GL_UNSIGNED_BYTE,raw.data());
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+    for(int row=0;row<192;++row)std::copy_n(raw.data()+std::size_t(191-row)*256,256,pixels.data()+std::size_t(row)*256);
+    for(auto& p:pixels) {const unsigned a=p>>24,r=p&255,g=(p>>8)&255,b=(p>>16)&255;p=(a<<24)|(r<<16)|(g<<8)|b;}
+    return pixels;
+}
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
     constexpr std::size_t plane=std::size_t(256)*GpuLayout::recipeRows;
     if(recipes.size()!=plane*4)throw std::runtime_error("Composition recipes have an unexpected size");
