@@ -241,7 +241,10 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     else if(layout_.sides)screenReason="sides";
     else if(layout_.band)screenReason="band";
     else if(layout_.inset[2]>0)screenReason="inset";
+    // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
+    // composed path recomputes the current one and does not match (docs/porting/07).
     else if(layout_.placed)screenReason="panels";
+
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
     if(diag::composeUse&&!*screenReason) {
         const bool ready=window_.gpu().nativePictureReady();
@@ -468,6 +471,11 @@ void FramePresenter::present() {
             }
         }
     } else different=std::size_t(-1);
+    std::printf("compose check layout: canvas %.0fx%.0f placed %d screens [%.0f,%.0f %.0fx%.0f] [%.0f,%.0f %.0fx%.0f] composed %d,%d\n",
+        layout_.canvasWidth,layout_.canvasHeight,layout_.placed?1:0,
+        layout_.screens[0][0],layout_.screens[0][1],layout_.screens[0][2],layout_.screens[0][3],
+        layout_.screens[1][0],layout_.screens[1][1],layout_.screens[1][2],layout_.screens[1][3],
+        layout_.composed[0],layout_.composed[1]);
     std::printf("compose check: %zu of %d differ, worst step %u, box %d,%d..%d,%d bands %u %u %u %u %u %u %u %u\n",
         different,w*h,worst,minX,minY,maxX,maxY,bands[0],bands[1],bands[2],bands[3],bands[4],bands[5],bands[6],bands[7]);
     // The two pictures themselves, coarse enough to read in a journal: '0' is

@@ -336,10 +336,16 @@ compose use: 240 frames presented from the composed screens   （?gpucompose=1�
 16×16 的 `#/.` 差异图，以及两张 64×32 的灰度缩略图。这是任何新布局/新路径的验收闸门。
 
 它立刻抓到一个**真问题**：在**面板布局**（`layout_.placed`，宽窗口下两屏并排）里，合成呈现
-与 recipe 呈现差 25% 的像素（右半整块），原因清楚——CPU 是"每屏保留自己那张"
-（`screenRecipes_`/`seen_`），而合成路径每帧重算当前画面；两者在面板布局里对不上。
-`composeSupported` 之外再按 `panel-placed` 拒绝（`compose use: not composed, panels`），
-在把"每屏记忆"搬到纹理之前，`?gpucompose=1` 不进这种帧。
+与 recipe 呈现差 25% 的像素。闸门因此加上 `panels`（`compose use: not composed, panels`），
+`?gpucompose=1` 暂时不进这种帧。
+
+排查到的事实（还没修完，写下来免得重来）：check 打印的布局是 `canvas 683x384 placed 1
+screens [0,64 341x256] [341,64 341x256] composed 2,3`，两张 64×32 缩略图显示**合成呈现
+几乎全黑**、而 recipe 呈现右半有画面。合成屏是这帧的"图形变体"（mux 之前的层），标题画面
+那种帧的图形层本来就近乎空——CPU 那边右半之所以有画面，来自 `screenRecipes_` 按屏保留的
+旧图；也就是说这条差异的根因在"每屏记忆"没有对应的纹理，而不在面板几何本身。下一个动作
+是把 `seen_[s]`/`screenRecipes_[s]` 的语义搬到纹理（切屏时冻结，而不是每帧重算），再用
+`?gpucompose=check` 量到个位数步进、才允许 `panels` 重新进闸门。
 
 ### 真机验收怎么做
 
