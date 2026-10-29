@@ -247,6 +247,13 @@ uniform vec4 uScreen0;
 uniform vec4 uScreen1;
 uniform int uThreeScreenRow;
 uniform float uScale;
+// The two screens composed on the GPU, when the canvas has nothing but them to
+// draw (docs/porting/07, stage B3): the top one and the bottom one, in the place
+// the recipes would have had them. They carry the 2D layers, the 3D layer and the
+// blends already, so the recipe path below is not used at all.
+uniform sampler2D uScreenA;
+uniform sampler2D uScreenB;
+uniform int uComposed;
 out vec4 oColor;
 vec4 three;
 vec3 brightness(vec3 color,float code) {
@@ -259,7 +266,17 @@ vec3 brightness(vec3 color,float code) {
 // One DS pixel's recipe applied to this fragment's 3D sample.
 int rowFirst=0,rowLast=383;
 bool insetCell=false;
+vec3 composedPixel(ivec2 cell) {
+    int row=cell.y;
+    int y=row<192?row:row-192;
+    vec2 uv=vec2((float(clamp(cell.x,0,255))+0.5)/256.0,1.0-(float(y)+0.5)/192.0);
+    vec3 colour;
+    if(row<192)colour=texture(uScreenA,uv).rgb;
+    else colour=texture(uScreenB,uv).rgb;
+    return colour;
+}
 vec3 pixel(ivec2 cell) {
+    if(uComposed!=0)return composedPixel(cell);
     bool side=!insetCell&&(cell.x<0||cell.x>255);
     if(side&&uSides==0) return vec3(0.0);
     ivec2 r=ivec2(clamp(cell.x,0,255),clamp(cell.y,rowFirst,rowLast));
@@ -301,6 +318,7 @@ vec3 pixel(ivec2 cell) {
 // A high-resolution picture over the DS pixel at `cell` (recipe plane 3),
 // sampled where this fragment falls in that pixel.
 vec3 hdOver(vec3 color,vec2 cell) {
+    if(uComposed!=0)return color;   // the composed screens already carry what HD would replace
     vec2 at=cell+0.5;
     ivec2 c=ivec2(floor(at));
     if(!insetCell&&(c.x<0||c.x>255)) return color;
@@ -1710,7 +1728,12 @@ std::vector<std::uint32_t> GpuRenderer::readScreen(bool sub) {
 void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t> recipes,int windowWidth,int windowHeight,bool stretch) {
     constexpr std::size_t plane=std::size_t(256)*GpuLayout::recipeRows;
     if(recipes.size()!=plane*4)throw std::runtime_error("Composition recipes have an unexpected size");
-    if(!diag::skipUpload)
+    // Stage B3: both screens were composed on the GPU and the canvas has nothing
+    // but them to draw, so the canvas samples those two pictures and the recipes -
+    // four planes of 256 x 704, 2.9 MB a frame - are not uploaded at all.
+    const bool composed=layout.composedTop>=0&&layout.composedTop<=1;
+    const unsigned topScreen=composed?unsigned(layout.composedTop):0u;
+    if(!composed&&!diag::skipUpload)
     for(unsigned plane=0;plane<4;++plane) {
         gl::BindTexture(GL_TEXTURE_2D,recipeTextures_[plane]);
         gl::PixelStorei(GL_UNPACK_ALIGNMENT,4);
@@ -1784,6 +1807,11 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
     gl::Uniform1i(uniform(composeProgram_,"uRecipe3"),6);
     gl::ActiveTexture(GL_TEXTURE7);gl::BindTexture(GL_TEXTURE_2D,hdAtlas_);
     gl::Uniform1i(uniform(composeProgram_,"uHdAtlas"),7);
+    gl::ActiveTexture(GL_TEXTURE8);gl::BindTexture(GL_TEXTURE_2D,composed?screens_[topScreen].color:0);
+    gl::Uniform1i(uniform(composeProgram_,"uScreenA"),8);
+    gl::ActiveTexture(GL_TEXTURE9);gl::BindTexture(GL_TEXTURE_2D,composed?screens_[topScreen^1].color:0);
+    gl::Uniform1i(uniform(composeProgram_,"uScreenB"),9);
+    gl::Uniform1i(uniform(composeProgram_,"uComposed"),composed?1:0);
     gl::Uniform2f(uniform(composeProgram_,"uCanvas"),layout.canvasWidth,layout.canvasHeight);
     gl::Uniform1i(uniform(composeProgram_,"uSides"),layout.sides&&fogged_[0].framebuffer?1:0);
     gl::Uniform1i(uniform(composeProgram_,"uPlaced"),layout.placed?1:0);

@@ -70,6 +70,11 @@ struct GpuLayout {
     // bottom screen (its plates above and beside it).
     float topScale=1;
     bool band=false;
+    // Stage B3: when 0 or 1, the canvas shows the screens composed on the GPU -
+    // this engine's rows on top - instead of the recipes, and `present` skips the
+    // recipe upload entirely. The caller only sets it when the layout needs
+    // nothing else the screens cannot carry (sides, band, inset, HD pictures).
+    int composedTop=-1;
 };
 struct GpuSettings {
     // Highest supersampling factor; lowered automatically while the GPU cannot

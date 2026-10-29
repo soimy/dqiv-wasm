@@ -374,6 +374,56 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             return different;
         };
         const unsigned blended=run("blend",0x2041),plain=run("plain",0);
+        // --- the canvas drawing the composed screens (B3) ----------------------
+        // The canvas can take both screens from the GPU composition instead of the
+        // recipe planes, which are four 256 x 704 images (2.9 MB) a frame. The two
+        // presentations of the same frame have to be the same picture, so this
+        // builds the recipes the presenter would, presents those, then lets the
+        // canvas sample the two composed screens instead and compares.
+        unsigned canvasDiff=256u*384u;
+        {
+            // Alpha blending stays on; master brightness stays off. Brightness is
+            // the one place the two presentations round differently - the canvas
+            // brightens a composed colour in floating point, Display rounds it to
+            // six bits - and that up to-2-LSB difference is old and not what this
+            // checks. Everything the canvas contributes (which screen, which row,
+            // orientation) is the same either way.
+            *bldcnt=0x2041;*master=0;
+            // The sub screen has no layers of its own here: display mode 1 and a bare
+            // backdrop, which is a state the compositor takes and Display draws.
+            const unsigned subControlWas=*subControl;
+            *subControl=0x00010000u;
+            window.gpu().uploadDisplaySources(video);
+            Display reference;
+            reference.frame(video,{},true);
+            const auto& all=reference.recipes();
+            std::vector<std::uint32_t> recipes(std::size_t(4)*256*GpuLayout::recipeRows,0);
+            // A plane is both screens: 384 rows of 256, the same layout the
+            // presenter copies them into (the inset's 192 rows stay empty here).
+            for(unsigned plane=0;plane<4;++plane)
+                std::copy_n(all.data()+std::size_t(plane)*256*384,std::size_t(256)*384,
+                    recipes.data()+std::size_t(plane)*256*GpuLayout::recipeRows);
+            GpuLayout layout;
+            layout.canvasWidth=256;layout.canvasHeight=384;
+            layout.threeRects={{GpuLayout::Rect{0,0,0,0},GpuLayout::Rect{0,0,0,0}}};
+            int width=0,height=0;
+            window.gpu().present(layout,recipes,256,384,false);
+            const auto fromRecipes=window.gpu().readPresented(width,height);
+            std::string why;
+            const bool composed=window.gpu().composeScreen(video,false,reference,why)&&
+                window.gpu().composeScreen(video,true,reference,why);
+            layout.composedTop=reference.mainOnTop()?0:1;
+            window.gpu().present(layout,recipes,256,384,false);
+            const auto fromScreens=window.gpu().readPresented(width,height);
+            if(composed&&fromRecipes.size()==fromScreens.size()&&fromRecipes.size()==std::size_t(256)*384) {
+                canvasDiff=0;
+                for(std::size_t i=0;i<fromRecipes.size();++i)
+                    if(fromRecipes[i]!=fromScreens[i]&&canvasDiff++<3)
+                        std::printf("  gpu canvas: (%zu,%zu) recipes %08x screens %08x\n",
+                            i%256,i/256,fromRecipes[i],fromScreens[i]);
+            } else std::printf("  gpu canvas: not composed: %s\n",why.c_str());
+            *subControl=subControlWas;
+        }
         // --- affine backgrounds ------------------------------------------------
         // Tiles are 256 colours; the map is one byte per tile in modes 1/2/4
         // (8-bit) or a 16-bit entry with flip bits in modes 3/4/5. Engine B
@@ -721,10 +771,10 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const bool objectsShown=objectPixels>1000&&oneDPixels>400&&subPixels>300;
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
-            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u)\n",
+            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0&&canvasDiff==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;

@@ -90,7 +90,7 @@ BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`
 `[hd pictures N]`。高清图那条尤其要紧：HD 的图块是在画布上盖上去的，VRAM 里仍然是旧图块，
 所以"从 VRAM 合成"会安静地画出旧图——探针逐像素比对其实看不出来（CPU 的 `pixels()` 里也
 没有 HD），只有真机画面会不对，属于必须提前拒绝、不能等 CI 发现的那类。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ, backdrop3d 0/0)`：
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ, backdrop3d 0/0, canvas 0 of 196608 differ)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
 翻转、回绕与两个引擎，各自也是 0 差异。精灵三组：一屏七个对象（压过 BG 的实心 4bpp、
@@ -196,6 +196,27 @@ flag 时整屏是 backdrop 色**，所以这个用例不可能因为"什么都�
 就是源矩形取的是主屏那半张，见 `queueNative(source)`）。大战斗的 `topScale<1`、以及子引擎
 （它的那半场景根本没有缩略图），`composeSupported` 一律以 `backdrop 3D` 回退给 `Display`；
 探针的逐像素 diff 对烘焙过的帧跳过——那是**故意的**差异，比了只会天天报假警。
+
+**画布那条采样路径也已经有了（还没接上游戏）**：`GpuLayout::composedTop`（0/1，哪一屏在上）
+一设，`present()` 就不再上传 4 个 recipe 平面（2.9 MB/帧），画布着色器的 `uComposed` 分支按
+`cell` 的行号采样对应的 `screens_[…]`，`pixel()`/`hdOver` 都绕开 recipe。自检是把**同一帧**
+用两条路各呈现一次再逐像素比：`canvas 0 of 196608 differ`（recipe 那条先按 presenter 的布局
+把 `Display::recipes()` 铺成 256×704×4）。这一组把总亮度关掉了，理由写进代码：recipe 那条是
+浮点亮度作用在 8 位色上，`Display` 是六位取整，两者本来就差 1–2 个 LSB（计划里说的"已知 1 LSB"
+就是它），而这一组要验的是"哪一屏、哪一行、朝哪边"，不是亮度的舍入；亮度已经由 compose2d
+自己的用例逐像素对过。
+
+**但"接上"之前必须先补一件事**：`Mode::split / joined / field / effect` 呈现的不是
+`Display::recipes()`（显示引擎的最终输出），而是 `mainGraphicsRecipes()`——**显示模式选择
+capture 之前**的图形层（`Display::engine` 里 `graphics_=output` 就在模式 mux 之前）。
+城镇就是这种帧：主引擎是显示模式 2 且每帧都在捕获，`FramePresenter` 判成 `Mode::split`。
+也就是说，拿"最终显示输出"的合成屏去喂画布，在城镇会画错——模式 2 的最终输出是那张捕获位图，
+而画布现在画的是"图形层 + 画布分辨率的 3D"。所以 compose2d 还要一个"图形变体"（跳过模式 mux，
+即不做模式 2 的整屏取图），split 用它；`single`（不捕获的那些帧）才用最终输出那版。
+另外 split 的记账是"每个屏各自保留自己那张"（`subEngine` 为假的帧不重算子屏），接到纹理上
+就是"子屏不重算时保留它的纹理"，`screens_` 本来就一直在；只要把"这一帧有没有更新过"记清楚，
+别把上一帧的屏当成这一帧的。B3 的下一步就是这个，接上之后 `?gpucompose=1` 才真的能省
+`pres 1207`（`dr`/`dc` 要等 B4 把 `hd_` 的判定从 `engine()` 里拆出来之后才能一起省）。
 
 **B4 捕获上 GPU（1–2 天）**
 捕获 = 从 3D/画布纹理 blit 进捕获纹理；显示它（LCDC 直读 bank 的模式 2）时采样捕获纹理。
