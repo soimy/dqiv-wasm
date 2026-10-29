@@ -90,7 +90,7 @@ BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`
 `[hd pictures N]`。高清图那条尤其要紧：HD 的图块是在画布上盖上去的，VRAM 里仍然是旧图块，
 所以"从 VRAM 合成"会安静地画出旧图——探针逐像素比对其实看不出来（CPU 的 `pixels()` 里也
 没有 HD），只有真机画面会不对，属于必须提前拒绝、不能等 CI 发现的那类。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ, backdrop3d 0/0, canvas 0 of 196608 differ)`：
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ, backdrop3d 0/0, canvas 0 of 196608 differ, graphics 0)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
 翻转、回绕与两个引擎，各自也是 0 差异。精灵三组：一屏七个对象（压过 BG 的实心 4bpp、
@@ -218,13 +218,27 @@ capture 之前**的图形层（`Display::engine` 里 `graphics_=output` 就在�
 就是"子屏不重算时保留它的纹理"，`screens_` 本来就一直在；只要把"这一帧有没有更新过"记清楚，
 别把上一帧的屏当成这一帧的。
 
-**现在已经接上的是 `Mode::single`**（`?gpucompose=1`，默认关）：`FramePresenter` 在
-`display_.frame()` 之后把两个引擎合成进 `screens_`，成功就把 `layout_.composedTop` 设成
-`mainTop?0:1`，于是 `present()` 不再传 recipe、画布直接采样那两张图；失败就退回 recipe，
-第一帧之后每 120 帧打一行 `compose use: fell back, <理由>`。`empty_`（面板布局"另一屏是否空白"
-的判据）照旧从 `display_.recipes()` 里数，只跳过 2.9MB 的拷贝；`split/joined/field/effect`
-仍然整条走 recipe——城镇那种帧先要在真机上把"画布到底该画图形层还是最终输出"确认下来，
-再按上面的图形变体接。
+**现在接上的是 `Mode::single` 和 `Mode::split`**（`?gpucompose=1`，默认关）：
+`FramePresenter` 在 `display_.frame()` 之后合成，成功就设 `layout_.composed[2]`，`present()`
+不再传 recipe、画布直接采样那两张图；失败就退回 recipe，每 120 帧打一行
+`compose use: fell back, <理由>`。
+
+为此补了三件事：
+
+1. **`screens_` 从两个目标变成四个**：0/1 是两个引擎自己的图（探针/自检读回来的就是它），
+   2/3 是"画布上看到的上屏/下屏"。原来"引擎号 == 屏幕号"只在 `mainTop` 为真时成立，主引擎
+   换到下屏时画布会取错图；现在 `composeScreen(..., target)` 明确写进 DS 屏槽位，画布永远
+   上屏取 2、下屏取 3（`layout_.composed` 存的是槽位号，split 的两半可能指同一个槽）。
+2. **compose2d 的图形变体**（`uGraphics`）：跳过显示模式 2 的整屏取图，其余照旧（模式 1 本来
+   就是同一份）。自检把同一帧用"配方"和"合成屏"各呈现一次：`graphics 0`——那一帧故意是
+   显示模式 2 + BG0 开着，所以两边的差别正好是"位图 vs 图形层"，图形变体要是没生效会差
+   98304 个像素（这组还要求配方那半至少 1000 个非黑像素，空转不了）。
+3. **`capture` 从 `scene3d` 里拆出来**成为独立参数：一张图可以喂 BG0-3D / backdrop，而不
+   冒充"模式 2 显示的就是它"（那是 `Display::showsThreeCapture` 的判定，只有调用方知道）。
+
+split 的记账照旧：`seen_[0]/seen_[1]` 决定两半各自取哪块槽位（主引擎当前那块，或它上一次
+驱动的那块），主引擎的图形只合成进 `2+screen` 一个槽；`screenRecipes_` 在合成成功时不再拷贝。
+`joined/field/effect` 仍整条走 recipe（它们要 sides/inset/band，或三段拼起来的布局）。
 
 因此 `?gpucompose=1` 现在只省 `pres` 的一半（拷贝 + 上传；`display_.frame()` 还在跑），
 `dr`/`dc` 要等 B4 把 `hd_` 的判定从 `engine()` 里拆出来、能整条跳过 CPU 合成之后才省得掉。

@@ -354,7 +354,7 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             Display reference;
             reference.frame(video,three,true);
             std::string why;
-            const bool composed=window.gpu().composeScreen(video,subEngine,reference,why,capture);
+            const bool composed=window.gpu().composeScreen(video,subEngine,reference,why,capture,capture!=0);
             // A scene this stage refuses is a failed run, not a quiet pass: every
             // case here is one it says it handles.
             if(!composed) {
@@ -410,9 +410,11 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             window.gpu().present(layout,recipes,256,384,false);
             const auto fromRecipes=window.gpu().readPresented(width,height);
             std::string why;
-            const bool composed=window.gpu().composeScreen(video,false,reference,why)&&
-                window.gpu().composeScreen(video,true,reference,why);
-            layout.composedTop=reference.mainOnTop()?0:1;
+            // The presenter composes each engine into the DS screen it drives.
+            const bool mainTop=reference.mainOnTop();
+            const bool composed=window.gpu().composeScreen(video,false,reference,why,0,false,false,false,mainTop?2:3)&&
+                window.gpu().composeScreen(video,true,reference,why,0,false,false,false,mainTop?3:2);
+            layout.composed={2,3};   // the DS screens as the canvas draws them
             window.gpu().present(layout,recipes,256,384,false);
             const auto fromScreens=window.gpu().readPresented(width,height);
             if(composed&&fromRecipes.size()==fromScreens.size()&&fromRecipes.size()==std::size_t(256)*384) {
@@ -423,6 +425,55 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
                             i%256,i/256,fromRecipes[i],fromScreens[i]);
             } else std::printf("  gpu canvas: not composed: %s\n",why.c_str());
             *subControl=subControlWas;
+        }
+        // --- the wide layouts' picture: the layers before the display mode's mux ---
+        // Split and its relatives present Display::mainGraphicsRecipes, not the
+        // display's output. A display-mode-2 frame is exactly where those differ, so
+        // that is where the compositor's graphics variant has to draw the layers and
+        // not the bank: the two presentations of the same frame must agree here too.
+        unsigned graphicsDiff=256u*384u;
+        {
+            const unsigned controlWas=*control,subControlWas=*subControl;
+            *control=0x00020100u;   // display mode 2, BG0 still on: the bank vs the layers
+            *subControl=0x00010000u;   // the sub screen is a bare backdrop, as above
+            *bldcnt=0;*master=0;
+            window.gpu().uploadDisplaySources(video);
+            Display reference;
+            reference.frame(video,{},true);
+            const bool mainTop=reference.mainOnTop();
+            const int mainRow=mainTop?0:192,subRow=mainTop?192:0;
+            std::vector<std::uint32_t> recipes(std::size_t(4)*256*GpuLayout::recipeRows,0);
+            const auto graphics=reference.mainGraphicsRecipes();
+            const auto all=reference.recipes();
+            for(unsigned plane=0;plane<4;++plane) {
+                auto* destination=recipes.data()+std::size_t(plane)*256*GpuLayout::recipeRows;
+                std::copy_n(graphics.data()+std::size_t(plane)*256*192,std::size_t(256)*192,
+                    destination+std::size_t(mainRow)*256);
+                std::copy_n(all.data()+std::size_t(plane)*256*384+std::size_t(subRow)*256,
+                    std::size_t(256)*192,destination+std::size_t(subRow)*256);
+            }
+            GpuLayout layout;
+            layout.canvasWidth=256;layout.canvasHeight=384;
+            layout.threeRects={{GpuLayout::Rect{0,0,0,0},GpuLayout::Rect{0,0,0,0}}};
+            int width=0,height=0;
+            window.gpu().present(layout,recipes,256,384,false);
+            const auto fromRecipes=window.gpu().readPresented(width,height);
+            std::string why;
+            const bool composed=window.gpu().composeScreen(video,false,reference,why,0,false,false,true,mainTop?2:3)&&
+                window.gpu().composeScreen(video,true,reference,why,0,false,false,false,mainTop?3:2);
+            layout.composed={2,3};
+            window.gpu().present(layout,recipes,256,384,false);
+            const auto fromScreens=window.gpu().readPresented(width,height);
+            unsigned lit=0;
+            for(const auto p:fromRecipes)if(p&0x00ffffffu)++lit;
+            if(composed&&lit>1000&&fromRecipes.size()==fromScreens.size()) {
+                graphicsDiff=0;
+                for(std::size_t i=0;i<fromRecipes.size();++i)
+                    if(fromRecipes[i]!=fromScreens[i]&&graphicsDiff++<3)
+                        std::printf("  gpu canvas graphics: (%zu,%zu) recipes %08x screens %08x\n",
+                            i%256,i/256,fromRecipes[i],fromScreens[i]);
+            } else std::printf("  gpu canvas graphics: not composed (%s), %u lit\n",why.c_str(),lit);
+            *control=controlWas;*subControl=subControlWas;
         }
         // --- affine backgrounds ------------------------------------------------
         // Tiles are 256 colours; the map is one byte per tile in modes 1/2/4
@@ -670,7 +721,7 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             reference.frame(video,{},true);
             std::string why;
             unsigned passthroughDiff=256u*192u;
-            if(window.gpu().composeScreen(video,false,reference,why,captureTexture)) {
+            if(window.gpu().composeScreen(video,false,reference,why,captureTexture,true)) {
                 const auto& gpu=window.gpu().readScreen(false);
                 const auto five=[](unsigned v) {const unsigned b=(v&255)>>3;return (b<<3)|(b>>2);};
                 passthroughDiff=0;
@@ -744,7 +795,7 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
                 };
                 std::string why;
                 unsigned different=256u*192u;
-                if(window.gpu().composeScreen(video,false,reference,why,texture3d,true)) {
+                if(window.gpu().composeScreen(video,false,reference,why,texture3d,false,true)) {
                     const auto& gpu=window.gpu().readScreen(false);
                     different=0;
                     for(std::size_t i=0;i<picture.size();++i)
@@ -771,10 +822,11 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const bool objectsShown=objectPixels>1000&&oneDPixels>400&&subPixels>300;
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
-            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0&&canvasDiff==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ)\n",
+            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0
+            &&canvasDiff==0&&graphicsDiff==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;

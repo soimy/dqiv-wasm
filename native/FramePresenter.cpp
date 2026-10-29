@@ -225,22 +225,36 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     display_.setBand(mode==Mode::battle&&wideBattleFrame());
     display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
     if(diag::composeProbe||diag::composeDiff)probeComposition(video,mainTop);
-    // Stage B3 (?gpucompose=1): when the canvas shows the display engine's own
-    // output, the two screens composed on the GPU are that picture already, so the
-    // canvas takes them and the recipes - four planes, 2.9 MB a frame - stay home.
-    // Only the single-screen layout is wired for now: split/joined/field/effect
-    // present Display's graphics recipes (before its mode mux) instead, and the
-    // town's frames need that decided first (docs/porting/07).
+    // Stage B3 (?gpucompose=1): where the canvas shows a picture the compositor can
+    // build - the display engine's own output (single), or the layers before its
+    // display mode picks a source (split, the town's two-screen 3D frames) - it
+    // takes the two composed screens, and the recipes (four planes of 256 x 704,
+    // 2.9 MB a frame) are neither built nor uploaded. Slots 2 and 3 are the DS top
+    // and bottom screens as the canvas draws them. A frame that falls back keeps the
+    // whole recipe path.
     bool screens=false;
-    if(diag::composeUse&&mode==Mode::single&&!display_.showsHdPictures()&&!layout_.sides&&
-        !layout_.band&&layout_.inset[2]<=0) {
-        const unsigned capture=window_.gpu().nativePictureReady()&&display_.showsThreeCapture(video)?
-            window_.gpu().nativeTexture():0;
+    if(diag::composeUse&&!display_.showsHdPictures()&&!layout_.sides&&!layout_.band&&
+        layout_.inset[2]<=0&&(mode==Mode::single||mode==Mode::split)) {
+        const bool ready=window_.gpu().nativePictureReady();
+        const unsigned picture=ready?window_.gpu().nativeTexture():0;
+        const bool capture=ready&&display_.showsThreeCapture(video);
         std::string why;
-        screens=window_.gpu().composeScreen(video,false,display_,why,capture)&&
-            window_.gpu().composeScreen(video,true,display_,why,capture);
-        if(screens)layout_.composedTop=mainTop?0:1;
-        else {
+        if(mode==Mode::single) {
+            // The engine that drives the top screen can change: LCDC says which.
+            screens=window_.gpu().composeScreen(video,false,display_,why,picture,capture,false,false,
+                    mainTop?2:3)&&
+                window_.gpu().composeScreen(video,true,display_,why,picture,false,false,false,
+                    mainTop?3:2);
+            if(screens)layout_.composed={2,3};
+        } else {
+            // Split shows the main engine's graphics one DS screen at a time, and the
+            // other screen keeps the picture it had when the engine was there (the
+            // same bookkeeping as screenRecipes_ below, which this replaces).
+            const int slot=2+screen;
+            screens=window_.gpu().composeScreen(video,false,display_,why,picture,false,false,true,slot);
+            if(screens)layout_.composed={seen_[0]?2:slot,seen_[1]?3:slot};
+        }
+        if(!screens) {
             static unsigned fellBack=0;
             if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());
         }
@@ -248,7 +262,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
-        screenRecipes_[screen].assign(main.begin(),main.end());seen_[screen]=true;
+        if(!screens)screenRecipes_[screen].assign(main.begin(),main.end());
+        seen_[screen]=true;
         empty_[screen]=emptyScreen(main)?empty_[screen]+1:0;
         const auto& top=screenRecipes_[seen_[0]?0:screen];
         const auto& bottom=screenRecipes_[seen_[1]?1:screen];
@@ -260,7 +275,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
                 recipes_[2*planePixels+y*256+x]=bottom[2*screenPixels+x]&0xff000000u;recipes_[3*planePixels+y*256+x]=0;
             }
         } else {
-            place(top,0);place(bottom,192);
+            if(!screens)place(top,0);
+            if(!screens)place(bottom,192);
             if(mode==Mode::joined) {
                 // The halves come from consecutive frames: during fades their master
                 // brightness differs by a step, which would show the join. Both take
@@ -324,7 +340,8 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
     if(diag::composeDiff&&probeFrames_%60==0) {
         for(unsigned engine=0;engine<2;++engine) {
             std::string why;
-            if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?picture:0,bake))continue;
+            if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?picture:0,
+                engine==0&&capture!=0,bake))continue;
             // The baked 3D through the backdrop is a deliberate difference: Display
             // has no 3D picture and shows the backdrop colour there.
             if(bake)continue;

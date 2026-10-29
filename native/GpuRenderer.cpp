@@ -417,6 +417,7 @@ uniform usampler2D uOam;      // object attribute memory, one 16-bit entry per t
 uniform highp sampler2D uScreen3d;   // this screen's reduced 3D picture, when the caller has one
 uniform float uThreeOn;             // BG0 is showing that picture (DISPCNT says BG0 draws 3D)
 uniform int uBackdrop3D;            // a bare backdrop shows that picture too (wide battles)
+uniform int uGraphics;              // the layers alone: what the canvas shows before the capture mux
 uniform vec4 uBgCnt[4];       // BGxCNT
 uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
 uniform vec4 uWinBase;        // background region: physical offset of each 128 KB slot, -1 unmapped
@@ -672,8 +673,10 @@ void main() {
     else if(target1&&effect==1&&target2&&sceneAlpha<0)c=blend(top,below,eva,evb,4);
     else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
     // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
-    // and none of the layers above are drawn at all.
-    if(int(uMode.x)==2) {
+    // and none of the layers above are drawn at all. A frame the canvas presents
+    // before the display mode picks its source keeps the layers instead - that is
+    // Display's graphics recipes, copied where engine() does graphics_ = output.
+    if(int(uMode.x)==2&&uGraphics==0) {
         if(int(uEffects.w)!=0) {
             // The bank holds nothing but this picture - the capture wrote it, whole
             // screen, at the start of the bank - so it is sampled where it comes
@@ -687,7 +690,7 @@ void main() {
                 c=rgb15(vramPhysical(at)|(vramPhysical(at+1)<<8));
             }
         }
-    } else if(uBackdrop3D!=0&&first==5) {
+    } else if(uGraphics==0&&uBackdrop3D!=0&&first==5) {
         // Nothing 2D covers this pixel: in a battle the 3D camera spans the whole
         // canvas and the screen's bare backdrop is the hole it shows through. On
         // the canvas that is Display's recipe flag 8, drawn with the wide scene;
@@ -1626,7 +1629,7 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     }
     return true;
 }
-bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned scene3d,bool backdrop3D) {
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned scene3d,bool capture,bool backdrop3D,bool graphics,int target) {
     if(!composeSupported(video,sub,display,scene3d!=0,why,backdrop3D))return false;
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
@@ -1672,14 +1675,18 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     // at 0x05000400 (entry 0x200). Entry 0 doubles as the backdrop of each.
     // The last component says the screen is one picture the compositor has as a
     // texture: display mode 2 then samples that instead of the VRAM bank.
-    const bool captureShown=scene3d&&((control>>16)&(sub?1:3))==2;
+    const bool captureShown=capture&&scene3d&&((control>>16)&(sub?1:3))==2;
     const float effects[4]={float(std::min(16u,reg16(base+0x54)&31)),float(reg16(base+0x6c)),float(sub?0x200:0),
         captureShown?1.f:0.f};
     int bankMask=0;
     for(unsigned bank=0;bank<4;++bank)if(video.lcdcBank(bank))bankMask|=1<<bank;
     const float displayMode[4]={float((control>>16)&(sub?1:3)),float(bankMask),float(control>>24),float(sub?1:0)};
-    resize(screens_[sub?1:0],256,192,false,false);
-    gl::BindFramebuffer(GL_FRAMEBUFFER,screens_[sub?1:0].framebuffer);
+    // The four targets: 0 and 1 are the engines' own pictures, which is what a
+    // verification reads back; 2 and 3 are the DS top and bottom screens as the
+    // canvas shows them (the engine that drives a screen can change).
+    Target& sink=screens_[target<0?(sub?1:0):target];
+    resize(sink,256,192,false,false);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,sink.framebuffer);
     gl::Viewport(0,0,256,192);
     gl::Disable(GL_BLEND);gl::Disable(GL_DEPTH_TEST);gl::Disable(GL_SCISSOR_TEST);
     gl::ColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
@@ -1695,6 +1702,7 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     gl::Uniform1i(uniform(compose2dProgram_,"uScreen3d"),3);
     gl::Uniform1f(uniform(compose2dProgram_,"uThreeOn"),!sub&&(control&0x108)==0x108&&scene3d?1.f:0.f);
     gl::Uniform1i(uniform(compose2dProgram_,"uBackdrop3D"),backdrop3D&&scene3d?1:0);
+    gl::Uniform1i(uniform(compose2dProgram_,"uGraphics"),graphics?1:0);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgCnt"),4,bgCnt);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgOff"),4,bgOff);
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinBase"),1,windowBase);
@@ -1731,8 +1739,8 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
     // Stage B3: both screens were composed on the GPU and the canvas has nothing
     // but them to draw, so the canvas samples those two pictures and the recipes -
     // four planes of 256 x 704, 2.9 MB a frame - are not uploaded at all.
-    const bool composed=layout.composedTop>=0&&layout.composedTop<=1;
-    const unsigned topScreen=composed?unsigned(layout.composedTop):0u;
+    const bool composed=layout.composed[0]>=0&&layout.composed[0]<4&&
+        layout.composed[1]>=0&&layout.composed[1]<4;
     if(!composed&&!diag::skipUpload)
     for(unsigned plane=0;plane<4;++plane) {
         gl::BindTexture(GL_TEXTURE_2D,recipeTextures_[plane]);
@@ -1807,9 +1815,9 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
     gl::Uniform1i(uniform(composeProgram_,"uRecipe3"),6);
     gl::ActiveTexture(GL_TEXTURE7);gl::BindTexture(GL_TEXTURE_2D,hdAtlas_);
     gl::Uniform1i(uniform(composeProgram_,"uHdAtlas"),7);
-    gl::ActiveTexture(GL_TEXTURE8);gl::BindTexture(GL_TEXTURE_2D,composed?screens_[topScreen].color:0);
+    gl::ActiveTexture(GL_TEXTURE8);gl::BindTexture(GL_TEXTURE_2D,composed?screens_[layout.composed[0]].color:0);
     gl::Uniform1i(uniform(composeProgram_,"uScreenA"),8);
-    gl::ActiveTexture(GL_TEXTURE9);gl::BindTexture(GL_TEXTURE_2D,composed?screens_[topScreen^1].color:0);
+    gl::ActiveTexture(GL_TEXTURE9);gl::BindTexture(GL_TEXTURE_2D,composed?screens_[layout.composed[1]].color:0);
     gl::Uniform1i(uniform(composeProgram_,"uScreenB"),9);
     gl::Uniform1i(uniform(composeProgram_,"uComposed"),composed?1:0);
     gl::Uniform2f(uniform(composeProgram_,"uCanvas"),layout.canvasWidth,layout.canvasHeight);

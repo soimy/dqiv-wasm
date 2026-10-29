@@ -70,11 +70,12 @@ struct GpuLayout {
     // bottom screen (its plates above and beside it).
     float topScale=1;
     bool band=false;
-    // Stage B3: when 0 or 1, the canvas shows the screens composed on the GPU -
-    // this engine's rows on top - instead of the recipes, and `present` skips the
-    // recipe upload entirely. The caller only sets it when the layout needs
-    // nothing else the screens cannot carry (sides, band, inset, HD pictures).
-    int composedTop=-1;
+    // Stage B3: the screen slot (see composeScreen's `target`: 2 is the DS top
+    // screen, 3 the bottom) the canvas draws in each half, top half first. Both
+    // -1: the recipes. When set, `present` skips the recipe upload entirely, so the
+    // caller only sets it when the layout needs nothing the screens cannot carry
+    // (sides, band, inset, HD pictures).
+    std::array<int,2> composed{-1,-1};
 };
 struct GpuSettings {
     // Highest supersampling factor; lowered automatically while the GPU cannot
@@ -145,7 +146,14 @@ public:
     // `backdrop3D`: the canvas draws the wide 3D scene through the screen's bare
     // backdrop (GpuLayout::backdrop3D, battles); the compositor bakes that in so
     // the composed screen is complete on its own (docs/porting/07, stage B3).
-    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned scene3d=0,bool backdrop3D=false);
+    // `graphics`: the layers alone, without the display mode's own source (mode 2's
+    // VRAM bank). The wide layouts present exactly that: Display::mainGraphicsRecipes,
+    // taken before the mode mux. `target`: which slot to compose into - 0 and 1 are
+    // the engines' own pictures (the default), 2 and 3 the DS top and bottom screens
+    // as the canvas draws them.
+    // `capture`: display mode 2 shows exactly this picture (Display::showsThreeCapture).
+    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned scene3d=0,
+        bool capture=false,bool backdrop3D=false,bool graphics=false,int target=-1);
     // The same test without drawing: what a frame would need that the GPU path
     // does not have yet (empty when it can take the frame).
     // `backdrop3D`: the canvas needs the 3D scene through a bare backdrop, so a
@@ -195,7 +203,7 @@ private:
     unsigned recipeTextures_[4]{},sideColumns_=0;
     unsigned sourceVram_=0,sourcePalette_=0,sourceOam_=0;
     unsigned compose2dProgram_=0;
-    Target screens_[2];
+    Target screens_[4];
     std::array<std::uint32_t,NitroVideo::vramBlockCount> vramSeen_{};
     std::uint32_t paletteSeen_=0,oamSeen_=0;
     unsigned hdAtlas_=0; // HdPictures cells, upscaled and premultiplied
