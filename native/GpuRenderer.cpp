@@ -398,6 +398,7 @@ uniform usampler2D uPalette;  // palette RAM, one 16-bit entry per texel
 uniform usampler2D uOam;      // object attribute memory, one 16-bit entry per texel
 uniform highp sampler2D uScreen3d;   // this screen's reduced 3D picture, when the caller has one
 uniform float uThreeOn;             // BG0 is showing that picture (DISPCNT says BG0 draws 3D)
+uniform int uBackdrop3D;            // a bare backdrop shows that picture too (wide battles)
 uniform vec4 uBgCnt[4];       // BGxCNT
 uniform vec4 uBgOff[4];       // BGxHOFS, BGxVOFS
 uniform vec4 uWinBase;        // background region: physical offset of each 128 KB slot, -1 unmapped
@@ -667,6 +668,21 @@ void main() {
                 int at=(bank<<17)+(p.y*256+p.x)*2;
                 c=rgb15(vramPhysical(at)|(vramPhysical(at+1)<<8));
             }
+        }
+    } else if(uBackdrop3D!=0&&first==5) {
+        // Nothing 2D covers this pixel: in a battle the 3D camera spans the whole
+        // canvas and the screen's bare backdrop is the hole it shows through. On
+        // the canvas that is Display's recipe flag 8, drawn with the wide scene;
+        // here it is the screen's own slice of the picture, so a soft pixel in a
+        // wide window - the price of baking it in (docs/porting/07, stage B3).
+        // A fully transparent picture pixel keeps the backdrop, as the canvas'
+        // "below" would.
+        uint t=straight(texelFetch(uScreen3d,ivec2(p.x,191-p.y),0));
+        if(t!=0u) {
+            c=t|0xff000000u;
+            // The picture takes the brightness of the screen's 3D layer, the way
+            // Display brightens a first-target 3D pixel (BG0 draws 3D here).
+            if(int(uThreeOn)!=0&&(bldcnt&1)!=0&&effect>=2)c=brightness(c,effect-1,int(uEffects.x));
         }
     }
     int master=int(uEffects.y);
@@ -1526,7 +1542,7 @@ void GpuRenderer::uploadDisplaySources(NitroVideo& video) {
     }
     gl::BindTexture(GL_TEXTURE_2D,0);
 }
-bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& display,bool scene3d,std::string& why) const {
+bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& display,bool scene3d,std::string& why,bool backdrop3D) const {
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
@@ -1542,6 +1558,10 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     // HD pictures replace tiles on the canvas, not in VRAM, so a screen composed
     // from VRAM would show the tiles underneath instead.
     if(display.showsHdPictures()) {why="hd pictures";return false;}
+    // A battle's bare backdrop shows the wide 3D scene on the canvas. It can only
+    // be baked into a screen that has the picture, and the sub screen's slice of
+    // the scene is not the picture this compositor holds.
+    if(backdrop3D&&!scene3d) {why="backdrop 3D";return false;}
     if(control&128) {why="forced blank";return false;}
     // Display::engine masks the sub engine's display mode with 1, not 3.
     const unsigned displayMode=(control>>16)&(sub?1:3);
@@ -1588,8 +1608,8 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     }
     return true;
 }
-bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned scene3d) {
-    if(!composeSupported(video,sub,display,scene3d!=0,why))return false;
+bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& display,std::string& why,unsigned scene3d,bool backdrop3D) {
+    if(!composeSupported(video,sub,display,scene3d!=0,why,backdrop3D))return false;
     const unsigned base=0x04000000+(sub?0x1000:0);
     const auto reg16=[&](unsigned address) {return unsigned(*static_cast<const std::uint16_t*>(video.reg(address,2)));};
     const unsigned control=*static_cast<const std::uint32_t*>(video.reg(base,4));
@@ -1649,13 +1669,14 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     gl::ActiveTexture(GL_TEXTURE0);gl::BindTexture(GL_TEXTURE_2D,sourceVram_);
     gl::ActiveTexture(GL_TEXTURE1);gl::BindTexture(GL_TEXTURE_2D,sourcePalette_);
     gl::ActiveTexture(GL_TEXTURE2);gl::BindTexture(GL_TEXTURE_2D,sourceOam_);
-    const bool threeShown=captureShown||(!sub&&(control&0x108)==0x108);
+    const bool threeShown=captureShown||(!sub&&(control&0x108)==0x108)||(backdrop3D&&scene3d!=0);
     gl::ActiveTexture(GL_TEXTURE3);gl::BindTexture(GL_TEXTURE_2D,threeShown?scene3d:0);
     gl::Uniform1i(uniform(compose2dProgram_,"uVram"),0);
     gl::Uniform1i(uniform(compose2dProgram_,"uPalette"),1);
     gl::Uniform1i(uniform(compose2dProgram_,"uOam"),2);
     gl::Uniform1i(uniform(compose2dProgram_,"uScreen3d"),3);
     gl::Uniform1f(uniform(compose2dProgram_,"uThreeOn"),!sub&&(control&0x108)==0x108&&scene3d?1.f:0.f);
+    gl::Uniform1i(uniform(compose2dProgram_,"uBackdrop3D"),backdrop3D&&scene3d?1:0);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgCnt"),4,bgCnt);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgOff"),4,bgOff);
     gl::Uniform4fv(uniform(compose2dProgram_,"uWinBase"),1,windowBase);

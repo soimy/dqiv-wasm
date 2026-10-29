@@ -286,17 +286,28 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
     ++probeFrames_;
     // Stage B2d: where the screen is nothing but this frame's captured 3D picture,
     // the compositor can take the picture itself instead of the copy in VRAM.
-    const unsigned capture=display_.showsThreeCapture(video)&&window_.gpu().nativePictureReady()?
-        window_.gpu().nativeTexture():0;
+    const bool ready=window_.gpu().nativePictureReady();
+    const unsigned capture=ready&&display_.showsThreeCapture(video)?window_.gpu().nativeTexture():0;
+    // Stage B3: in a battle the canvas draws the wide 3D scene through the screen's
+    // bare backdrop. The compositor bakes the screen's own slice of that picture in
+    // where it can; where it cannot - a large battle's shrunken screen maps
+    // elsewhere, and the sub screen's slice is not reduced at all - the frame stays
+    // with Display, whose picture has no 3D to lose.
+    const bool backdrop=layout_.backdrop3D;
+    const bool bake=backdrop&&layout_.topScale>=1&&ready&&capture==0;
+    const unsigned picture=capture?capture:(bake?window_.gpu().nativeTexture():0);
     for(unsigned engine=0;engine<2;++engine) {
         std::string why;
-        if(window_.gpu().composeSupported(video,engine!=0,display_,engine==0&&capture!=0,why))++probeSupported_[engine];
+        if(window_.gpu().composeSupported(video,engine!=0,display_,engine==0&&picture!=0,why,backdrop))++probeSupported_[engine];
         else ++probeReasons_[engine][why];
     }
     if(diag::composeDiff&&probeFrames_%60==0) {
         for(unsigned engine=0;engine<2;++engine) {
             std::string why;
-            if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?capture:0))continue;
+            if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?picture:0,bake))continue;
+            // The baked 3D through the backdrop is a deliberate difference: Display
+            // has no 3D picture and shows the backdrop colour there.
+            if(bake)continue;
             const auto gpu=window_.gpu().readScreen(engine!=0);
             const auto cpu=display_.pixels();
             const std::size_t at=((engine==0)==mainTop)?0:std::size_t(256)*192;

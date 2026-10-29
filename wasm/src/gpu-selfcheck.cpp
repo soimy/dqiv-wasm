@@ -643,7 +643,7 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         // byte, which blend against what is below. The texture holds the picture
         // as the 3D target does - premultiplied - and Display gets the straight
         // version of it, which is what the readback hands over.
-        unsigned threeRun=256u*192u;
+        unsigned threeRun=256u*192u,backdropRun=256u*192u,backdropOffRun=256u*192u;
         {
             std::vector<std::uint32_t> premultiplied(std::size_t(256)*192),picture(premultiplied.size()),flipped(premultiplied.size());
             const auto straightFrom=[](std::uint32_t p) {
@@ -677,6 +677,42 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
             // composed pixel is the picture's own colour and nothing else.
             const bool threeShown=window.gpu().readScreen(false)[1]==(picture[8]|0xff000000u);
             threeRun=threeShown?threeDiff:256u*192u;
+            // --- a bare backdrop lets the 3D scene through (B3) -------------------
+            // In a battle the canvas draws the wide 3D scene through the screen's
+            // bare backdrop (GpuLayout::backdrop3D). With every layer off, every
+            // pixel is that backdrop, so composed with the pass-through baked in the
+            // screen is the picture itself - a known answer, not Display's recipe
+            // (which has no 3D and keeps the backdrop colour there).
+            *control=0x00010000u;   // display mode 1, no backgrounds, no objects
+            *bldcnt=0;*master=0;
+            {
+                window.gpu().uploadDisplaySources(video);
+                Display reference;
+                reference.frame(video,picture,true);
+                const auto want=[&](std::size_t i) {
+                    return picture[i]>>24?(picture[i]&0xffffffu)|0xff000000u:0xffff0000u;
+                };
+                std::string why;
+                unsigned different=256u*192u;
+                if(window.gpu().composeScreen(video,false,reference,why,texture3d,true)) {
+                    const auto& gpu=window.gpu().readScreen(false);
+                    different=0;
+                    for(std::size_t i=0;i<picture.size();++i)
+                        if(gpu[i]!=want(i)&&different++<3)
+                            std::printf("  gpu compose: backdrop-3d (%zu,%zu) gpu %08x want %08x\n",
+                                i%256,i/256,gpu[i],want(i));
+                } else std::printf("  gpu compose: backdrop-3d not composed: %s\n",why.c_str());
+                // Without the flag the same screen is the backdrop colour throughout,
+                // which is what Display leaves there: the test above cannot pass by
+                // drawing nothing at all.
+                unsigned off=256u*192u;
+                if(window.gpu().composeScreen(video,false,reference,why,0,false)) {
+                    off=0;
+                    for(const auto p:window.gpu().readScreen(false))if(p!=0xffff0000u)++off;
+                } else std::printf("  gpu compose: backdrop-3d without the flag not composed: %s\n",why.c_str());
+                backdropRun=off==0?different:256u*192u;
+                backdropOffRun=off;
+            }
             gl::DeleteTextures(1,&texture3d);
             *hofs=hofsBefore;
         }
@@ -685,10 +721,10 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const bool objectsShown=objectPixels>1000&&oneDPixels>400&&subPixels>300;
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
-            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ)\n",
+            &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0;
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;

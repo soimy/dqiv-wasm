@@ -90,7 +90,7 @@ BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`
 `[hd pictures N]`。高清图那条尤其要紧：HD 的图块是在画布上盖上去的，VRAM 里仍然是旧图块，
 所以"从 VRAM 合成"会安静地画出旧图——探针逐像素比对其实看不出来（CPU 的 `pixels()` 里也
 没有 HD），只有真机画面会不对，属于必须提前拒绝、不能等 CI 发现的那类。
-自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ)`：
+自检 `selfcheck gpu compose: ok (blend 0, plain 0, mode2 0/0, affine16 0, affine8 0, affine-sub 0, obj 0/1827, obj1d 0/554, obj-sub 0/360, bg0-3d 0 of 49152 differ, backdrop3d 0/0)`：
 构造一个滚动的文本 BG（16 个调色板组、跨块边界的写、透明像素），同一帧分别用 `Display` 与
 GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差异；仿射三组再覆盖两种地图宽度、
 翻转、回绕与两个引擎，各自也是 0 差异。精灵三组：一屏七个对象（压过 BG 的实心 4bpp、
@@ -100,7 +100,9 @@ GPU 合成，两种寄存器配置（有/无混合+亮度）逐像素为 0 差�
 数是「与 CPU 的差异」，后一个数是「对象真的画上去了多少像素」，只有前者为 0 的测试会空转。
 BG0 画 3D 那一组给的是预乘纹理 + 反预乘后的 ARGB 两份，透明度取 0/128/255 三档，覆盖
 透明让位、五位 alpha 混合与不透明直出，并额外钉住一个只可能来自 3D 图的像素（否则整屏
-只有 backdrop 也照样「与 CPU 相同」）。
+只有 backdrop 也照样「与 CPU 相同」）。backdrop 放 3D 通过那一组不进这串差异计数——它故意
+与 `Display` 不同：整屏与 3D 图逐像素相同（透明像素留 backdrop），且同一个屏幕关掉 flag 后
+整屏是 backdrop 色，两个数都必须是 0。
 过程中抓到的真错：主引擎的 BG 调色板基址是 `0x05000000`（不是 `0x200`，那是 OBJ 调色板）；
 着色器输出把 ARGB 写成了 BGR；DISPCNT 的 bit 24–29（字符/地图扩展基址）用 float 传会丢位，
 改成低 24 位 + 顶字节分两段上传；引擎 B 的 BG 从 `0x06200000` 起读、四个 128 KB 窗口彼此
@@ -181,6 +183,19 @@ screen0/screen1，面板/内嵌/scale2x/HD/band 的布局逻辑保留。
    原始 3D 目标、放大会更清晰。宽屏战斗（backdrop 放 3D 通过）因此会比现在略软；如果真机
    上看得见，再给这条单独传高分辨率纹理，而不是为此保留整套 coverage。
 2. band 仍在画布上画（`layout_.band`），不进取景合成——它本来就在屏外。
+
+**B3 的这一半（合成里画 backdrop 3D）已落地**：`composeScreen(..., scene3d, backdrop3D)`
+在显示模式 1、没有任何 2D 层盖住、`first==5` 的像素上采样 `uScreen3d`（屏幕自己那一片
+256×192），反预乘后**不量化**（画布那条路也不量化），保留 3D 图自身的透明度语义：全透明就
+留 backdrop，等同画布的"below"；3D 层是 BLDCNT 的第一目标且淡出/淡入（effect≥2）时再按
+`Display` 的六位算术调一次亮度，最后才轮到总亮度。自检 `backdrop3d 0/0`：全层关闭时整屏
+等于 3D 图（已知答案，不是 Display 的 recipe——CPU 没有 3D，那里是 backdrop 色），且**不带
+flag 时整屏是 backdrop 色**，所以这个用例不可能因为"什么都没画"而通过。
+
+顺带把边界写死：这条只有主引擎、且只有屏幕按 1:1 落在画布上时才对得上（`nativeTexture()`
+就是源矩形取的是主屏那半张，见 `queueNative(source)`）。大战斗的 `topScale<1`、以及子引擎
+（它的那半场景根本没有缩略图），`composeSupported` 一律以 `backdrop 3D` 回退给 `Display`；
+探针的逐像素 diff 对烘焙过的帧跳过——那是**故意的**差异，比了只会天天报假警。
 
 **B4 捕获上 GPU（1–2 天）**
 捕获 = 从 3D/画布纹理 blit 进捕获纹理；显示它（LCDC 直读 bank 的模式 2）时采样捕获纹理。

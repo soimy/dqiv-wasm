@@ -137,10 +137,15 @@ public:
     // `scene3d`: the screen's reduced 3D picture, or 0 when there is none. BG0
     // shows it where DISPCNT says BG0 draws 3D, and display mode 2 shows it
     // instead of the VRAM copy when the capture left nothing else in the bank.
-    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned scene3d=0);
+    // `backdrop3D`: the canvas draws the wide 3D scene through the screen's bare
+    // backdrop (GpuLayout::backdrop3D, battles); the compositor bakes that in so
+    // the composed screen is complete on its own (docs/porting/07, stage B3).
+    bool composeScreen(NitroVideo&,bool sub,const Display& display,std::string& why,unsigned scene3d=0,bool backdrop3D=false);
     // The same test without drawing: what a frame would need that the GPU path
     // does not have yet (empty when it can take the frame).
-    bool composeSupported(NitroVideo&,bool sub,const Display&,bool scene3d,std::string& why) const;
+    // `backdrop3D`: the canvas needs the 3D scene through a bare backdrop, so a
+    // screen the compositor cannot bake it into is not supported either.
+    bool composeSupported(NitroVideo&,bool sub,const Display&,bool scene3d,std::string& why,bool backdrop3D=false) const;
     unsigned screenTexture(bool sub) const {return screens_[sub?1:0].color;}
     // The composed screen, top-down ARGB (verification only).
     std::vector<std::uint32_t> readScreen(bool sub);
