@@ -236,8 +236,9 @@ capture 之前**的图形层（`Display::engine` 里 `graphics_=output` 就在�
 3. **`capture` 从 `scene3d` 里拆出来**成为独立参数：一张图可以喂 BG0-3D / backdrop，而不
    冒充"模式 2 显示的就是它"（那是 `Display::showsThreeCapture` 的判定，只有调用方知道）。
 
-split 的记账照旧：`seen_[0]/seen_[1]` 决定两半各自取哪块槽位（主引擎当前那块，或它上一次
-驱动的那块），主引擎的图形只合成进 `2+screen` 一个槽；`screenRecipes_` 在合成成功时不再拷贝。
+split 的记账：`seen_[0]/seen_[1]` 决定两半各自取哪块槽位——槽 4 是**当帧**主引擎图形，
+槽 5/6 是**每屏保留图**（只在 Display 写 `screenRecipes_` 的那一帧跟进，写不成就标记失效，
+两本账因此不会走散）。
 探针那行现在也带上布局与合成帧数（`compose probe: N frames, split, screens M, main ok …`），
 真机跑一次 `?gpucompose=probe` 就能确认城镇到底走 `single` 还是 `split`、以及有多少帧真的
 从合成器呈现——这两个数就是 B3 的验收证据。
@@ -328,8 +329,9 @@ compose use: 240 frames presented from the composed screens   （?gpucompose=1�
 
 标题之后还有两段（长时间 unattended 跑就能看到）：演职员表是 **`effect`**（每屏用捕获图
 当纹理铺满整宽，带 sides），再往后是 **`joined`**。`?gpucompose=1` 会以
-`compose use: not composed, sides` / `layout` 说明为什么那一段没接——现在只有 `single` 与
-`split` 在合成，其余都回退，所以"合成帧数"会在 240 帧之后停住。这不是 bug，是覆盖边界。
+`compose use: not composed, sides` / `layout` 说明为什么那一段没接。覆盖范围：`split`
+（含面板布局）与 `single` 在合成（`single` 的面板帧除外）；`joined/field/effect/battle/menu`
+整条回退，所以"合成帧数"到那几段就停住。这不是 bug，是覆盖边界。
 
 **`?gpucompose=check`：同帧呈现比对。** 每 120 帧把同一帧先按合成屏呈现、再按 recipe
 呈现，各自 `readPresented` 后逐像素比较，打印差异数、最大步进、包围盒、分带直方图、一张
