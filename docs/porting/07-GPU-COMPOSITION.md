@@ -238,6 +238,9 @@ capture 之前**的图形层（`Display::engine` 里 `graphics_=output` 就在�
 
 split 的记账照旧：`seen_[0]/seen_[1]` 决定两半各自取哪块槽位（主引擎当前那块，或它上一次
 驱动的那块），主引擎的图形只合成进 `2+screen` 一个槽；`screenRecipes_` 在合成成功时不再拷贝。
+探针那行现在也带上布局与合成帧数（`compose probe: N frames, split, screens M, main ok …`），
+真机跑一次 `?gpucompose=probe` 就能确认城镇到底走 `single` 还是 `split`、以及有多少帧真的
+从合成器呈现——这两个数就是 B3 的验收证据。
 `joined/field/effect` 仍整条走 recipe（它们要 sides/inset/band，或三段拼起来的布局）。
 
 因此 `?gpucompose=1` 现在只省 `pres` 的一半（拷贝 + 上传；`display_.frame()` 还在跑），

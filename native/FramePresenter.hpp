@@ -82,8 +82,8 @@ private:
     // GPU composition probe (docs/porting/07-GPU-COMPOSITION.md, stage B2): what
     // this scene's engine states need that the GPU path does not have yet, and
     // with `composeDiff` how far the two compositions are apart on real frames.
-    void probeComposition(NitroVideo&,bool mainTop);
-    unsigned probeFrames_=0,probeSupported_[2]={};
+    void probeComposition(NitroVideo&,bool mainTop,Mode mode);
+    unsigned probeFrames_=0,probeSupported_[2]={},composedFrames_=0;
     std::map<std::string,unsigned> probeReasons_[2];
     // Copies one screen's recipes (3 planes of 256 x 192) to `row` of the presented ones.
     void place(std::span<const std::uint32_t> screenRecipes,unsigned row);

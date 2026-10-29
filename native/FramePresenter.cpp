@@ -224,7 +224,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     display_.setWorldBackground(mode==Mode::menu);
     display_.setBand(mode==Mode::battle&&wideBattleFrame());
     display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
-    if(diag::composeProbe||diag::composeDiff)probeComposition(video,mainTop);
+    if(diag::composeProbe||diag::composeDiff)probeComposition(video,mainTop,mode);
     // Stage B3 (?gpucompose=1): where the canvas shows a picture the compositor can
     // build - the display engine's own output (single), or the layers before its
     // display mode picks a source (split, the town's two-screen 3D frames) - it
@@ -254,7 +254,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             screens=window_.gpu().composeScreen(video,false,display_,why,picture,false,false,true,slot);
             if(screens)layout_.composed={seen_[0]?2:slot,seen_[1]?3:slot};
         }
-        if(!screens) {
+        if(screens)++composedFrames_;
+        else {
             static unsigned fellBack=0;
             if(++fellBack%120==1)std::printf("compose use: fell back, %s\n",why.c_str());
         }
@@ -318,7 +319,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     }
     presentable_=true;
 }
-void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
+void FramePresenter::probeComposition(NitroVideo& video,bool mainTop,Mode mode) {
     ++probeFrames_;
     // Stage B2d: where the screen is nothing but this frame's captured 3D picture,
     // the compositor can take the picture itself instead of the copy in VRAM.
@@ -355,7 +356,12 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop) {
         }
     }
     if(probeFrames_%120==0) {
-        std::printf("compose probe: %u frames, main ok %u",probeFrames_,probeSupported_[0]);
+        // The layout matters as much as the registers: split and its relatives show
+        // the layers before the display mode's mux, single shows its output, and only
+        // the latter two are what ?gpucompose=1 presents from the compositor.
+        const char* modeName[]={"single","split","joined","battle","field","menu","effect"};
+        std::printf("compose probe: %u frames, %s, screens %u, main ok %u",probeFrames_,
+            modeName[unsigned(mode)%7],composedFrames_,probeSupported_[0]);
         for(const auto& reason:probeReasons_[0])std::printf(" [%s %u]",reason.first.c_str(),reason.second);
         std::printf(", sub ok %u",probeSupported_[1]);
         for(const auto& reason:probeReasons_[1])std::printf(" [%s %u]",reason.first.c_str(),reason.second);
