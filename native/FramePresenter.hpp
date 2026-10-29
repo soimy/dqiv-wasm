@@ -37,6 +37,11 @@ private:
     // Whether the next frame needs the 3D picture on the CPU: a composed frame keeps
     // it on the GPU unless a capture still reads it there.
     bool nativeWanted_=true;
+    // 1 frame in 120 presents both ways and compares (diag::composeCheck).
+    bool checkFrame_=false;
+    // Which screen slots hold a picture composed as that DS screen (2 = top, 3 = bottom).
+    bool composedSlot_[4]={};
+    unsigned checkFrames_=0;
     // Per screen (0 top, 1 bottom) in the joined mode.
     std::array<std::vector<GxTriangle>,2> overlays_;
     std::array<std::vector<std::uint32_t>,2> screenRecipes_;

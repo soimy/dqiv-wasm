@@ -331,6 +331,16 @@ compose use: 240 frames presented from the composed screens   （?gpucompose=1�
 `compose use: not composed, sides` / `layout` 说明为什么那一段没接——现在只有 `single` 与
 `split` 在合成，其余都回退，所以"合成帧数"会在 240 帧之后停住。这不是 bug，是覆盖边界。
 
+**`?gpucompose=check`：同帧呈现比对。** 每 120 帧把同一帧先按合成屏呈现、再按 recipe
+呈现，各自 `readPresented` 后逐像素比较，打印差异数、最大步进、包围盒、分带直方图、一张
+16×16 的 `#/.` 差异图，以及两张 64×32 的灰度缩略图。这是任何新布局/新路径的验收闸门。
+
+它立刻抓到一个**真问题**：在**面板布局**（`layout_.placed`，宽窗口下两屏并排）里，合成呈现
+与 recipe 呈现差 25% 的像素（右半整块），原因清楚——CPU 是"每屏保留自己那张"
+（`screenRecipes_`/`seen_`），而合成路径每帧重算当前画面；两者在面板布局里对不上。
+`composeSupported` 之外再按 `panel-placed` 拒绝（`compose use: not composed, panels`），
+在把"每屏记忆"搬到纹理之前，`?gpucompose=1` 不进这种帧。
+
 ### 真机验收怎么做
 
 1. **先看覆盖**：`?gpucompose=probe` 跑城镇、战斗、菜单、标题各一分钟。每 120 帧一行：

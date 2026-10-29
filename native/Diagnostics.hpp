@@ -14,4 +14,5 @@ inline bool skipUpload = false;     // keep the last recipe planes on the GPU
 inline bool composeProbe = false;   // count frames the GPU path can take, by reason
 inline bool composeDiff = false;    // also compare both compositions, 1 frame in 60
 inline bool composeUse = false;     // present the GPU composition (?gpucompose=1)
+inline bool composeCheck = false;   // also present both ways on 1 frame in 120 and compare
 }

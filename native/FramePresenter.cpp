@@ -84,7 +84,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // longer than the scene it shows.
     Mode mode=menu?Mode::menu:unifiedFrame()?Mode::joined:wideFieldFrame()?Mode::field:wideBattleFrame()?Mode::battle:
         ((control>>16)&3)==2&&capturing?Mode::split:Mode::single;
-    // Screen effects texture each screen with its captured picture: right
+    checkFrame_=diag::composeCheck&&(++checkFrames_%120==0);
+    // Screen effects each screen with its captured picture: right
     // after the world filled the canvas, they use that picture instead.
     if(mode==Mode::split||mode==Mode::single) {
         const auto& all=geometry.triangles();
@@ -240,6 +241,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     else if(layout_.sides)screenReason="sides";
     else if(layout_.band)screenReason="band";
     else if(layout_.inset[2]>0)screenReason="inset";
+    else if(layout_.placed)screenReason="panels";
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
     if(diag::composeUse&&!*screenReason) {
         const bool ready=window_.gpu().nativePictureReady();
@@ -259,7 +261,21 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             // (the same bookkeeping as screenRecipes_ below, which this replaces).
             const int slot=2+screen;
             screens=window_.gpu().composeScreen(video,false,display_,why,picture,false,false,true,slot);
-            if(screens)layout_.composed={seen_[0]?2:slot,seen_[1]?3:slot};
+            if(screens) {
+                composedSlot_[slot]=true;
+                const int otherScreen=screen^1,otherSlot=2+otherScreen;
+                if(seen_[otherScreen]&&!composedSlot_[otherSlot]) {
+                    // The recipes kept that screen's own older picture, and no composed
+                    // texture holds it: this frame stays with them (the two books
+                    // agree only while every such screen was composed when it changed).
+                    screens=false;screenReason="screen picture";
+                } else {
+                    // While a screen never had a picture of its own the recipes show
+                    // this frame's on both halves; the texture path copies it too.
+                    if(!seen_[otherScreen])window_.gpu().copyScreenSlot(slot,otherSlot);
+                    layout_.composed={2,3};
+                }
+            }
         }
         if(screens) {
             // The acceptance number: frames whose picture the canvas took from the
@@ -279,7 +295,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // callback outlives neither of the two objects it uses (both belong to the
     // window), and every read of that VRAM region goes through materialise().
     bool captureDeferred=false;
-    if(screens&&!probing&&window_.gpu().nativePictureReady()&&display_.captureDeferrable(video)) {
+    if(!checkFrame_&&screens&&!probing&&window_.gpu().nativePictureReady()&&display_.captureDeferrable(video)) {
         window_.gpu().capturePicture(window_.gpu().nativeTexture());
         video.setCaptureSource([this](std::uint16_t* pixels,std::size_t count) {
             window_.gpu().readCaptureInto(pixels,count);
@@ -300,14 +316,15 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // its pixels from the composition itself, so those frames keep it.
     const unsigned captureNow=*static_cast<unsigned*>(video.reg(0x04000064,4));
     const bool captureFrom3d=!(captureNow&0x80000000u)||(captureNow&(1u<<24))!=0;
-    if(captureDeferred) {}   // made above, and its bytes only if someone reads them
+    if(checkFrame_) display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
+    else if(captureDeferred) {}   // made above, and its bytes only if someone reads them
     else if(screens&&!probing&&captureFrom3d)display_.captureOnly(video,native3d_);
     else display_.frame(video,native3d_,mode==Mode::single||mode==Mode::battle||mode==Mode::menu);
     if(probing)probeComposition(video,mainTop,mode);
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
-        if(!screens)screenRecipes_[screen].assign(main.begin(),main.end());
+        if(!screens||checkFrame_)screenRecipes_[screen].assign(main.begin(),main.end());
         seen_[screen]=true;
         // Display's composition did not run on a composed frame, so there is
         // nothing honest to measure here: the panel layout keeps its last answer.
@@ -322,8 +339,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
                 recipes_[2*planePixels+y*256+x]=bottom[2*screenPixels+x]&0xff000000u;recipes_[3*planePixels+y*256+x]=0;
             }
         } else {
-            if(!screens)place(top,0);
-            if(!screens)place(bottom,192);
+            if(!screens||checkFrame_)place(top,0);
+            if(!screens||checkFrame_)place(bottom,192);
             if(mode==Mode::joined) {
                 // The halves come from consecutive frames: during fades their master
                 // brightness differs by a step, which would show the join. Both take
@@ -336,7 +353,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     } else {
         const auto all=display_.recipes();
         if(!screens)for(unsigned s=0;s<2;++s)empty_[s]=emptyScreen(all.subspan(s*screenPixels,screenPixels))?empty_[s]+1:0;
-        if(!screens)for(unsigned plane=0;plane<Display::recipePlanes;++plane)
+        if(!screens||checkFrame_)for(unsigned plane=0;plane<Display::recipePlanes;++plane)
             std::copy_n(all.data()+plane*screenPixels*2,screenPixels*2,recipes_.data()+plane*planePixels);
         if(!screens&&layout_.band) {
             // The plates above the bottom screen: their colour, or the scene
@@ -421,7 +438,77 @@ void FramePresenter::present() {
     ProfileScope timing("present");
     // Interpolated frames follow until the next one (GameWindow::pace).
     if(interpolation_.valid&&window_.interpolating())return;
-    if(presentable_)window_.present(layout_,recipes_);
+    if(!presentable_)return;
+    window_.present(layout_,recipes_);
+    if(!checkFrame_||layout_.composed[0]<0)return;
+    // The same frame, both ways: what the canvas shows from the composed screens,
+    // then what the recipes make of it. Brightness rounding gives a few one-step
+    // pixels; a layout or sampling mistake gives a block of them.
+    int w=0,h=0;
+    const auto fromScreens=window_.gpu().readPresented(w,h);
+    GpuLayout plain=layout_;plain.composed={-1,-1};
+    window_.present(plain,recipes_);
+    int w2=0,h2=0;
+    const auto fromRecipes=window_.gpu().readPresented(w2,h2);
+    std::size_t different=0;unsigned worst=0;
+    int minX=0,maxX=-1,minY=0,maxY=-1;
+    unsigned bands[8]={};
+    if(w==w2&&h==h2&&fromScreens.size()==fromRecipes.size()) {
+        minX=w;minY=h;
+        for(std::size_t i=0;i<fromScreens.size();++i) {
+            const auto a=fromScreens[i],b=fromRecipes[i];
+            if(a==b)continue;
+            const int x=int(i%std::size_t(w)),y=int(i/std::size_t(w));
+            minX=std::min(minX,x);maxX=std::max(maxX,x);minY=std::min(minY,y);maxY=std::max(maxY,y);
+            bands[y*8/(h>0?h:1)]++;
+            ++different;
+            for(unsigned shift=0;shift<24;shift+=8) {
+                const unsigned x=(a>>shift)&255,y=(b>>shift)&255;
+                worst=std::max(worst,x>y?x-y:y-x);
+            }
+        }
+    } else different=std::size_t(-1);
+    std::printf("compose check: %zu of %d differ, worst step %u, box %d,%d..%d,%d bands %u %u %u %u %u %u %u %u\n",
+        different,w*h,worst,minX,minY,maxX,maxY,bands[0],bands[1],bands[2],bands[3],bands[4],bands[5],bands[6],bands[7]);
+    // The two pictures themselves, coarse enough to read in a journal: '0' is
+    // black and '9' bright, 64 columns by 32 rows.
+    {
+        const int cols=64,rows=32;
+        for(int which=0;which<2;++which) {
+            const auto& pixels=which?fromRecipes:fromScreens;
+            std::printf("  %s:\n",which?"recipes":"screens");
+            for(int by=0;by<rows;++by) {
+                std::string line(cols,' ');
+                for(int bx=0;bx<cols;++bx) {
+                    unsigned long long sum=0,count=0;
+                    for(int y=by*h/rows;y<(by+1)*h/rows;++y)for(int x=bx*w/cols;x<(bx+1)*w/cols;++x) {
+                        const auto p=pixels[std::size_t(y)*w+x];
+                        sum+=((p>>16)&255)+((p>>8)&255)+(p&255);++count;
+                    }
+                    const unsigned level=count?unsigned(sum/count/3*10/256):0u;
+                    line[bx]=char('0'+std::min(9u,level));
+                }
+                std::printf("   %s\n",line.c_str());
+            }
+        }
+    }
+    // A coarse map: '#' where more than half of a 16 x 16 block differs.
+    const int cell=16,cols=w/cell,rows=h/cell;
+    for(int by=0;by<rows;++by) {
+        std::string line(cols,' ');
+        for(int bx=0;bx<cols;++bx) {
+            unsigned n=0;
+            for(int y=0;y<cell;++y)for(int x=0;x<cell;++x) {
+                const std::size_t i=std::size_t(by*cell+y)*w+bx*cell+x;
+                if(fromScreens[i]!=fromRecipes[i])++n;
+            }
+            line[bx]=n*2>unsigned(cell*cell)?'#':'.';
+        }
+        std::printf("  map %s\n",line.c_str());
+    }
+    std::fflush(stdout);
+    // Leave the composed picture up: the check must not change what the player sees.
+    window_.present(layout_,recipes_);
 }
 void FramePresenter::keepForInterpolation(int mode,const std::vector<GpuBatch>& batches,const GxRasterState& state,
     const GxRenderOptions& options,int width,int height,const GpuFogSplit& fog,unsigned slot) {

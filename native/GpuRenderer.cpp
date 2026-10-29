@@ -1502,6 +1502,14 @@ std::vector<std::uint16_t> GpuRenderer::readCapture() {
     }
     return words;
 }
+void GpuRenderer::copyScreenSlot(int from,int to) {
+    if(from<0||from>3||to<0||to>3||from==to||!screens_[from].framebuffer)return;
+    resize(screens_[to],256,192,false,false);
+    gl::BindFramebuffer(GL_READ_FRAMEBUFFER,screens_[from].framebuffer);
+    gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER,screens_[to].framebuffer);
+    gl::BlitFramebuffer(0,0,256,192,0,0,256,192,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+    gl::BindFramebuffer(GL_FRAMEBUFFER,0);
+}
 void GpuRenderer::readCaptureInto(std::uint16_t* out,std::size_t count) {
     const auto words=readCapture();
     std::copy_n(words.begin(),std::min(count,words.size()),out);

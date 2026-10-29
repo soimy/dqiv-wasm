@@ -121,6 +121,9 @@ public:
     void capturePicture(unsigned picture);
     unsigned captureTexture() const {return capture_.color;}
     // The captured screen, top-down 16-bit words (verification only).
+    // Copies one screen target over another (the recipes keep a copy of a screen's
+    // picture for the other screen; a texture equivalent needs the same copy).
+    void copyScreenSlot(int from,int to);
     std::vector<std::uint16_t> readCapture();
     void readCaptureInto(std::uint16_t*,std::size_t count);   // the same, into a caller's buffer
     // False until a whole frame has gone round, when that texture is uninitialised
