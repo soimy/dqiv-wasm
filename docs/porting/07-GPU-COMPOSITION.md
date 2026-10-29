@@ -293,9 +293,14 @@ LCDC 用。这种帧里 `Display::deferCapture()` 只登记区域并清 bit 31�
 于是合成帧上省掉的现在是：`pres` 的一半（2.9MB 拷贝 + 上传）、`dr`、`dc`、`capture` 的
 256×192 循环、以及捕获 bank 那 128KB 的上传（不写 bank，stamp 不变，GPU 那边就不会收到它）。
 
-**还剩的一步**：`readNative` 本身。它现在还在跑，因为 `Display` 的剩下几个消费者（非合成帧的
-`engine()`、桌面端的即时读回路径）还要 CPU 像素。等这些帧也只剩 GPU 合成时，它才能整条去掉；
-那一步做完，城镇 profile 里 `readNative 1483` 也一起消失。
+**读回本身也跳过了。** 合成帧上 CPU 不再需要那 256×192 张图：合成在 GPU、整屏 3D 捕获也在
+GPU。`takeNative`（wasm 上就是每帧那 ~1.5ms 的 `glReadPixels`）现在只在"上一帧没合成"或者
+"捕获还得在 CPU 做"时才跑（`nativeWanted_`）。代价写明白：**一段合成帧之后的第一帧软件合成，
+拿到的是最后一次读回的那张图**（可能旧几帧）——只在模式切换的那一帧出现，之后立刻恢复。
+
+于是合成帧上 `readNative` 的等待也消失了；`readNative` 这个**函数**还在，因为它仍是
+非合成帧（`joined/field/battle/menu/effect`）和桌面端即时路径的来源。要把那些布局也搬上
+合成器（需要 sides/inset/band），它才能整条删掉。
 
 **B5 收敛（1 天）**
 四场景逐像素回归、真机 fps、Windows CI 三绿。

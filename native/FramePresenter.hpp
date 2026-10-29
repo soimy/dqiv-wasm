@@ -34,6 +34,9 @@ private:
     GxTextures& textures_;
     GpuLayout layout_;
     std::vector<std::uint32_t> native3d_,recipes_;
+    // Whether the next frame needs the 3D picture on the CPU: a composed frame keeps
+    // it on the GPU unless a capture still reads it there.
+    bool nativeWanted_=true;
     // Per screen (0 top, 1 bottom) in the joined mode.
     std::array<std::vector<GxTriangle>,2> overlays_;
     std::array<std::vector<std::uint32_t>,2> screenRecipes_;
