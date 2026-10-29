@@ -248,6 +248,18 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // composed path recomputes the current one and does not match (docs/porting/07).
     else if(layout_.placed)screenReason="panels";
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
+    // The main engine's graphics picture on its own, every graphics-layout frame:
+    // the half the split layout gives the engine's screen is this frame's picture
+    // (slot 4). Slots 5 and 6 keep the picture each screen had when the engine last
+    // drove it - written only on the frames Display's own book (screenRecipes_
+    // below) is written, so the two cannot drift apart (docs/porting/07, stage B3).
+    const bool graphicsLayout=mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect;
+    std::string memoryWhy;
+    if(diag::composeUse&&graphicsLayout) {
+        const bool ready=window_.gpu().nativePictureReady();
+        composedSlot_[4]=window_.gpu().composeScreen(video,false,display_,memoryWhy,
+            ready?window_.gpu().nativeTexture():0,false,false,true,4);
+    }
     if(diag::composeUse&&!*screenReason) {
         const bool ready=window_.gpu().nativePictureReady();
         const unsigned picture=ready?window_.gpu().nativeTexture():0;
@@ -260,26 +272,21 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
                     mainTop?3:2);
             if(screens)layout_.composed={2,3};
         } else {
-            // Split and joined show the main engine's graphics one DS screen at a time,
-            // and the other screen keeps the picture it had when the engine was there
-            // (the same bookkeeping as screenRecipes_ below, which this replaces).
-            const int slot=2+screen;
-            screens=window_.gpu().composeScreen(video,false,display_,why,picture,false,false,true,slot);
+            // Split shows the main engine's graphics one DS screen at a time: this
+            // frame's picture in the half the engine drives, and in the other half
+            // the picture that screen kept from when the engine was there.
+            screens=composedSlot_[4];
             if(screens) {
-                composedSlot_[slot]=true;
-                const int otherScreen=screen^1,otherSlot=2+otherScreen;
+                const int otherScreen=screen^1;
+                // A screen that never had a picture of its own shows this frame's,
+                // as the recipes do when they have no kept one to place.
+                const int otherSlot=seen_[otherScreen]?5+otherScreen:4;
                 if(seen_[otherScreen]&&!composedSlot_[otherSlot]) {
                     // The recipes kept that screen's own older picture, and no composed
-                    // texture holds it: this frame stays with them (the two books
-                    // agree only while every such screen was composed when it changed).
+                    // texture holds it: this frame stays with them.
                     screens=false;screenReason="screen picture";
-                } else {
-                    // While a screen never had a picture of its own the recipes show
-                    // this frame's on both halves; the texture path copies it too.
-                    if(!seen_[otherScreen])window_.gpu().copyScreenSlot(slot,otherSlot);
-                    layout_.composed={2,3};
-                }
-            }
+                } else layout_.composed={screen==0?4:otherSlot,screen==0?otherSlot:4};
+            } else screenReason=memoryWhy.c_str();
         }
         if(screens) {
             // The acceptance number: frames whose picture the canvas took from the
@@ -346,7 +353,13 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
-        if(!screens||checkFrame_)screenRecipes_[screen].assign(main.begin(),main.end());
+        if(!screens||checkFrame_) {
+            screenRecipes_[screen].assign(main.begin(),main.end());
+            // The book just moved: the screen's kept slot takes this frame's picture
+            // too, or nothing if the compositor could not build it.
+            composedSlot_[5+screen]=composedSlot_[4];
+            if(composedSlot_[5+screen])window_.gpu().copyScreenSlot(4,5+screen);
+        }
         seen_[screen]=true;
         // Display's composition did not run on a composed frame, so there is
         // nothing honest to measure here: the panel layout keeps its last answer.
@@ -499,7 +512,7 @@ void FramePresenter::present() {
             for(unsigned p=0;p<screenPixels;++p)sum+=((at[p]>>16)&255)+((at[p]>>8)&255)+(at[p]&255);
             std::printf("compose check recipe %u mean %llu\n",screen,sum/(screenPixels*3));
         }
-        for(int slot=0;slot<4;++slot) {
+        for(int slot=2;slot<7;++slot) {
             const auto pixels=window_.gpu().readScreenSlot(slot);
             unsigned long long sum=0;
             for(const auto p:pixels)sum+=((p>>16)&255)+((p>>8)&255)+(p&255);

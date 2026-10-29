@@ -214,7 +214,7 @@ private:
     unsigned recipeTextures_[4]{},sideColumns_=0;
     unsigned sourceVram_=0,sourcePalette_=0,sourceOam_=0;
     unsigned compose2dProgram_=0;
-    Target screens_[4];
+    Target screens_[7];
     std::array<std::uint32_t,NitroVideo::vramBlockCount> vramSeen_{};
     std::uint32_t paletteSeen_=0,oamSeen_=0;
     unsigned hdAtlas_=0; // HdPictures cells, upscaled and premultiplied

@@ -39,8 +39,9 @@ private:
     bool nativeWanted_=true;
     // 1 frame in 120 presents both ways and compares (diag::composeCheck).
     bool checkFrame_=false;
-    // Which screen slots hold a picture composed as that DS screen (2 = top, 3 = bottom).
-    bool composedSlot_[4]={};
+    // Which screen slots hold a usable picture: 2/3 the DS screens (single layout),
+    // 4 this frame's main-engine graphics, 5/6 the per-screen kept picture.
+    bool composedSlot_[7]={};
     unsigned checkFrames_=0;
     // Per screen (0 top, 1 bottom) in the joined mode.
     std::array<std::vector<GxTriangle>,2> overlays_;

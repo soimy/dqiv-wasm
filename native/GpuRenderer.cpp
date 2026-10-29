@@ -1799,7 +1799,7 @@ std::vector<std::uint32_t> GpuRenderer::readScreen(bool sub) {
     return pixels;
 }
 std::vector<std::uint32_t> GpuRenderer::readScreenSlot(int slot) {
-    if(slot<0||slot>3)return std::vector<std::uint32_t>(std::size_t(256)*192);
+    if(slot<0||slot>6)return std::vector<std::uint32_t>(std::size_t(256)*192);
     const auto& target=screens_[slot];
     std::vector<std::uint32_t> raw(std::size_t(256)*192),pixels(raw.size());
     if(!target.framebuffer)return pixels;
@@ -1816,8 +1816,8 @@ void GpuRenderer::present(const GpuLayout& layout,std::span<const std::uint32_t>
     // Stage B3: both screens were composed on the GPU and the canvas has nothing
     // but them to draw, so the canvas samples those two pictures and the recipes -
     // four planes of 256 x 704, 2.9 MB a frame - are not uploaded at all.
-    const bool composed=layout.composed[0]>=0&&layout.composed[0]<4&&
-        layout.composed[1]>=0&&layout.composed[1]<4;
+    const bool composed=layout.composed[0]>=0&&layout.composed[0]<7&&
+        layout.composed[1]>=0&&layout.composed[1]<7;
     if(!composed&&!diag::skipUpload)
     for(unsigned plane=0;plane<4;++plane) {
         gl::BindTexture(GL_TEXTURE_2D,recipeTextures_[plane]);
