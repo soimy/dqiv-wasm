@@ -305,6 +305,30 @@ GPU。`takeNative`（wasm 上就是每帧那 ~1.5ms 的 `glReadPixels`）现在�
 **B5 收敛（1 天）**
 四场景逐像素回归、真机 fps、Windows CI 三绿。
 
+### 真机验收怎么做（本机没有 ROM，这几步只能在设备上做）
+
+1. **先看覆盖**：`?gpucompose=probe` 跑城镇、战斗、菜单、标题各一分钟。每 120 帧一行：
+
+   ```
+   compose probe: N frames, <布局>, screens M, main ok A [理由 C], sub ok B [理由 D]
+   ```
+
+   `布局` 是 `single/split/joined/battle/field/menu/effect`；`screens` 是真正从合成器呈现的
+   帧数。要的是：城镇的 `布局` 应落在 `split`（或 `single`），`screens` 应接近 `N`；`理由`
+   里不该再出现 `display mode 2`（B2 起已支持），剩下的应该只有 `joined/field/battle/menu`
+   这几类没接的布局和 `hd pictures`。
+2. **再看画面**：同一场景用 `?gpucompose=0` 和 `?gpucompose=1` 各截一张图逐像素比（或肉眼
+   比对闪烁/错位）。需要特别看的四处：城镇的下屏（split 的"另一屏保留上一张"）、战斗的
+   宽屏两侧与 backdrop、菜单的图标（HD 图应当整条回退，不该出现旧图块）、屏幕最右/最下边
+   的滚动接缝。
+3. **最后看时间**：profile 叠加（`15.10` 的那套）在城镇重场景上取 `dr`/`dc`/`capture`/
+   `readNative`/`pres` 五项。合成帧上这五项应当只剩接近 0 的残值；`prep` 与 `r3d` 不受
+   影响（那是另一条线）。
+
+**已知且故意的差异**（不是 bug，比对时先排除）：捕获直通显示的是本帧的图而不是上一帧捕获的；
+battle 的 backdrop 3D 在合成屏里是 256×192 的缩略图；split 的另一半显示"那一屏自己的上一张"；
+一段合成帧之后的第一帧软件合成可能旧几帧。
+
 ## 5. 不在这轮里
 `prep` 1963（3500 三角形 CPU 变换）是独立的一条线：更少的三角形/更省的顶点路径，
 与 B 正交，B 落地后若离 60 还差再动它。
