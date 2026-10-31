@@ -452,9 +452,32 @@ uniform vec4 uEffects;        // BLDY, MASTER_BRIGHT, background palette base, u
 uniform vec4 uMode;           // display mode, bank mask, DISPCNT bits 24-31, engine (0 main, 1 sub)
 uniform vec4 uBgParam[2];     // BG2/BG3 PA,PB,PC,PD
 uniform vec4 uBgRef[2];       // BG2/BG3 reference point: x low 16 bits, x high, y low, y high
+uniform vec4 uWin[2];         // WININ, WINOUT, WH0, WV0; then WH1, WV1
 // The full DISPCNT: the low 24 bits come from uScreen, the top byte from uMode
 // (a float cannot hold all 32 bits of the register exactly).
 uint displayControl() {return uint(int(uScreen.y))|(uint(int(uMode.z))<<24);}
+// Display's range(): a window register holds two byte endpoints; a backwards
+// pair means the range wraps round the end of the screen.
+bool inWindow(uint value,uint endpoints) {
+    uint start=endpoints>>8u,end=endpoints&255u;
+    return start<=end?(value>=start&&value<end):(value>=start||value<end);
+}
+// Display::engine's mask: the layers a pixel shows (BG0-3 in bits 0-3, objects
+// in bit 4) and whether the colour effect applies (bit 5). Outside every window
+// it is WINOUT; the object window takes WINOUT's high byte, window 1 takes
+// WININ's high byte, and window 0 - checked last - takes WININ's low byte.
+uint windowMask(ivec2 p,bool objectWindow) {
+    uint control=displayControl();
+    if((control&0xe000u)==0u)return 63u;
+    uint winin=uint(int(uWin[0].x)),winout=uint(int(uWin[0].y));
+    uint mask=winout&63u;
+    if((control&0x8000u)!=0u&&objectWindow)mask=(winout>>8u)&63u;
+    if((control&0x4000u)!=0u&&inWindow(uint(p.x),uint(int(uWin[1].x)))&&inWindow(uint(p.y),uint(int(uWin[1].y))))
+        mask=(winin>>8u)&63u;
+    if((control&0x2000u)!=0u&&inWindow(uint(p.x),uint(int(uWin[0].z)))&&inWindow(uint(p.y),uint(int(uWin[0].w))))
+        mask=winin&63u;
+    return mask;
+}
 // One 128 KB slot of a region: the physical base the engine sees there (-1
 // unmapped) and its length. Display::engine reads each engine's backgrounds
 // and sprites as one flat region, so the compositor does the same.
@@ -587,8 +610,9 @@ uint bgPixel(int bg,int x,int y) {
 // covers it. Objects are taken in OAM order and the lowest priority number wins,
 // a tie going to the lower id, so the scan keeps a hit only when it beats the
 // one before it. Affine (rotation/scaling), bitmap and mosaicked objects are
-// still refused by composeSupported.
-uint objPixel(int x,int y,out int priority,out int semi) {
+// still refused by composeSupported. An OBJ-mode 2 sprite draws nothing itself:
+// its opaque pixels are the object window, reported through `windowHit`.
+uint objPixel(int x,int y,out int priority,out int semi,out bool windowHit) {
     // Widths and heights per shape (three of them) and size (four), in a row,
     // as Display::objects has them.
     const int widths[12]=int[12](8,16,32,64,16,32,32,64,8,8,16,32);
@@ -597,7 +621,7 @@ uint objPixel(int x,int y,out int priority,out int semi) {
     int obase=int(uMode.w)!=0?512:0;    // engine B's OAM follows engine A's
     bool mapped=(control&16u)!=0u;      // DISPCNT bit 4: one-dimensional character map
     int charOffset=mapped?int((control>>20)&3u):0;
-    uint found=0u;priority=5;semi=0;
+    uint found=0u;priority=5;semi=0;windowHit=false;
     for(int id=0;id<128;++id) {
         int at=obase+id*4;
         int a=int(texelFetch(uOam,ivec2(at,0),0).r);
@@ -607,7 +631,7 @@ uint objPixel(int x,int y,out int priority,out int semi) {
         if((a&0x100)!=0)continue;                   // affine: refused
         if((a&0x200)!=0)continue;                   // double size without affine
         int mode=(a>>10)&3;
-        if(mode>=2)continue;                        // OBJ window, bitmap: refused
+        if(mode==3)continue;                        // bitmap: refused
         int w=widths[shape*4+size],h=heights[shape*4+size];
         // Objects wrap round the screen: their place is a byte, and the width
         // and height are counted modulo the screen from there.
@@ -629,6 +653,9 @@ uint objPixel(int x,int y,out int priority,out int semi) {
         uint index=vramObj8(start+tileOffset+(eight?pixel:pixel>>1));
         if(!eight)index=(index>>uint((pixel&1)*4))&15u;
         if(index==0u)continue;
+        // Display marks the object window before any priority decision: it is
+        // the sprite's opaque pixels, wherever it sits in OAM order.
+        if(mode==2) {windowHit=true;continue;}
         int p=(c>>10)&3;
         if(found!=0u&&p>=priority)continue;
         // Extended per-object palettes are refused, so the colours come from
@@ -668,15 +695,18 @@ void main() {
         colour[bg]=c;key[bg]=(int(uBgCnt[bg].x)&3)*5+bg+1;
     }
     // Objects are the fifth layer and, at equal priority, come before BG0..3.
-    int objPriority=5,objSemi=0;
+    int objPriority=5,objSemi=0;bool objWindowHit=false;
     if((control&0x1000u)!=0u) {
-        uint o=objPixel(p.x,p.y,objPriority,objSemi);
+        uint o=objPixel(p.x,p.y,objPriority,objSemi,objWindowHit);
         if(o!=0u) {colour[4]=o;key[4]=objPriority*5;}
     }
+    // Display's windows: this pixel's mask says which of the five layers it
+    // shows (bits 0-4) and whether the colour effect applies at all (bit 5).
+    uint mask=windowMask(p,objWindowHit);
     // The two highest-priority layers decide the colour, as Display::compose.
     int first=5,second=5,k1=99,k2=99;
     for(int l=0;l<5;++l) {
-        if(colour[l]==0u)continue;
+        if((mask&(1u<<uint(l)))==0u||colour[l]==0u)continue;
         if(key[l]<k1){second=first;k2=k1;first=l;k1=key[l];}
         else if(key[l]<k2){second=l;k2=key[l];}
     }
@@ -689,12 +719,15 @@ void main() {
     // Display::compose's chain. The 3D layer, when it is the top one, blends by
     // its own five bits of alpha and is not brightened afterwards; a
     // semi-transparent object blends against what is behind it next; then the
-    // effect modes.
+    // effect modes. The mask's bit 5 is the window's "effect" switch: outside
+    // it - or in a window that leaves it out - the layers show flat.
     int sceneAlpha=first==0?threeAlpha:-1;
-    if(target2&&sceneAlpha>=0&&sceneAlpha<31)c=blend(top,below,sceneAlpha+1,31-sceneAlpha,5);
-    else if(target2&&first==4&&objSemi!=0)c=blend(top,below,eva,evb,4);
-    else if(target1&&effect==1&&target2&&sceneAlpha<0)c=blend(top,below,eva,evb,4);
-    else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
+    if((mask&32u)!=0u) {
+        if(target2&&sceneAlpha>=0&&sceneAlpha<31)c=blend(top,below,sceneAlpha+1,31-sceneAlpha,5);
+        else if(target2&&first==4&&objSemi!=0)c=blend(top,below,eva,evb,4);
+        else if(target1&&effect==1&&target2&&sceneAlpha<0)c=blend(top,below,eva,evb,4);
+        else if(target1&&effect>=2)c=brightness(top,effect-1,int(uEffects.x));
+    }
     // Display mode 2: the screen is one VRAM bank shown as a 256x192 bitmap,
     // and none of the layers above are drawn at all. A frame the canvas presents
     // before the display mode picks its source keeps the layers instead - that is
@@ -1656,7 +1689,6 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
     if(displayMode==2)return true;
     const unsigned mode=control&7;
     if(mode>5) {why="background mode "+std::to_string(mode);return false;}
-    if(control&0xe000) {why="windows";return false;}
     if(control&(1u<<30)) {why="extended palettes";return false;}
     // BG0 drawing the 3D screen needs the picture itself; without it Display
     // draws nothing at all there, so there is nothing to compose either.
@@ -1687,7 +1719,7 @@ bool GpuRenderer::composeSupported(NitroVideo& video,bool sub,const Display& dis
             if((!affine&&(attributes&0x200))||(attributes>>14)==3)continue;
             if(affine) {why="affine sprites";return false;}
             const unsigned objectMode=(attributes>>10)&3;
-            if(objectMode==2)continue;   // OBJ window: skipped without the window bit
+            if(objectMode==2)continue;   // OBJ window: the sprite only shapes the mask
             if(objectMode==3) {why="bitmap sprites";return false;}
             if(attributes&0x1000) {why="sprite mosaic";return false;}
         }
@@ -1779,6 +1811,9 @@ bool GpuRenderer::composeScreen(NitroVideo& video,bool sub,const Display& displa
     gl::Uniform4fv(uniform(compose2dProgram_,"uMode"),1,displayMode);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgParam"),2,bgParam);
     gl::Uniform4fv(uniform(compose2dProgram_,"uBgRef"),2,bgRef);
+    const float windowRegs[8]={float(reg16(base+0x48)),float(reg16(base+0x4a)),float(reg16(base+0x40)),
+        float(reg16(base+0x44)),float(reg16(base+0x42)),float(reg16(base+0x46)),0.f,0.f};
+    gl::Uniform4fv(uniform(compose2dProgram_,"uWin"),2,windowRegs);
     gl::DrawArrays(GL_TRIANGLE_STRIP,0,4);
     gl::ActiveTexture(GL_TEXTURE0);
     gl::BindFramebuffer(GL_FRAMEBUFFER,0);

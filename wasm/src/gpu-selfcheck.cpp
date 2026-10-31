@@ -620,6 +620,50 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         *control=0x00111210u;
         unsigned oneDPixels=0;
         for(std::size_t i=0;i<oneDOn.size();++i)oneDPixels+=oneDOn[i]!=oneDOff[i];
+        // --- display windows (B2's last layer property) -----------------------
+        // WIN0 shows BG1 and the objects, with the colour effect, inside a
+        // rectangle; WIN1 overrides the left strip with BG0 alone; outside both
+        // only BG1 shows, flat. A third run exchanges the two masks, so a
+        // compositor that mixed up the rectangles or the register halves shows
+        // as a colour; a fourth puts an object window - an OBJ-mode 2 sprite -
+        // on the right, whose opaque pixels take WINOUT's high byte.
+        auto* win0h=reg16(0x04000040);
+        auto* win1h=reg16(0x04000042);
+        auto* win0v=reg16(0x04000044);
+        auto* win1v=reg16(0x04000046);
+        auto* winin=reg16(0x04000048);
+        auto* winout=reg16(0x0400004a);
+        const unsigned win0hBefore=*win0h,win1hBefore=*win1h,win0vBefore=*win0v,win1vBefore=*win1v,
+            wininBefore=*winin,winoutBefore=*winout;
+        *control=0x00113210u;   // the 1D object scene plus window 0 and window 1
+        *win0h=0x40c0;          // x 64..192
+        *win0v=0x20a0;          // y 32..160
+        *win1h=0x0040;          // x 0..64
+        *win1v=0x00c0;          // y 0..192
+        *winin=0x0132;          // WIN0: BG1+objects+effect; WIN1: BG0, flat
+        *winout=0x0002;         // outside: BG1 only, flat
+        const unsigned windowDiff=run("windows",0x1252,false,0);
+        *winin=0x3201;          // the same rectangles, the two masks exchanged
+        const unsigned windowSwapDiff=run("windows-swapped",0x1252,false,0);
+        std::vector<std::uint8_t> oamWindow(0x800,0);
+        sprite(oamWindow,0,120,180,0,2,false,2,10,0,0);   // 32x32, OBJ mode 2
+        video.write(0x07000000,oamWindow);
+        *control=0x0011b210u;   // the same, plus the object window (bit 15)
+        *winout=0x0102;         // outside: BG1 flat; object window: BG0 flat
+        const unsigned windowObjDiff=run("windows-obj",0x1252,false,0);
+        // A mask that changed nothing would compare equal to any composition, so
+        // the same scene is composed once more with the windows off: the pixels
+        // that change are the ones the mask actually took away or flattened.
+        const auto windowOn=window.gpu().readScreen(false);
+        *control=0x00111210u;
+        run("windows-off",0x1252,false,0);
+        const auto windowOff=window.gpu().readScreen(false);
+        unsigned windowPixels=0;
+        for(std::size_t i=0;i<windowOn.size();++i)windowPixels+=windowOn[i]!=windowOff[i];
+        *win0h=std::uint16_t(win0hBefore);*win1h=std::uint16_t(win1hBefore);
+        *win0v=std::uint16_t(win0vBefore);*win1v=std::uint16_t(win1vBefore);
+        *winin=std::uint16_t(wininBefore);*winout=std::uint16_t(winoutBefore);
+        video.write(0x07000000,oam1d);
         // Engine B reads its objects from 0x06600000, its OAM from 0x07000400
         // and its object palette from entries 0x300..0x3ff: all three differ
         // from engine A's and each is a constant in the shader.
@@ -896,10 +940,12 @@ void gpuSelfCheck(GameWindow& window,GxTextures& textures) {
         const bool same=blended==0&&plain==0&&bitmapRun==0&&affine16==0&&affine8==0&&affineSub==0
             &&objDiff==0&&objOffDiff==0&&objOneD==0&&objOneDOffDiff==0
             &&objSub==0&&objSubOff==0&&objectsShown&&passthroughRun==0&&threeRun==0&&backdropRun==0
+            &&windowDiff==0&&windowSwapDiff==0&&windowObjDiff==0&&windowPixels>0
             &&canvasDiff==0&&graphicsDiff==0&&captureDiff==0&&lazyDiff==0;
-        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u, capture %u, lazy %u)\n",
+        std::printf("selfcheck gpu compose: %s (blend %u, plain %u, mode2 %u/%u, affine16 %u, affine8 %u, affine-sub %u, obj %u/%u, obj1d %u/%u, obj-sub %u/%u, windows %u/%u/%u of %u, bg0-3d %u of %u differ, backdrop3d %u/%u, canvas %u of 196608 differ, graphics %u, capture %u, lazy %u)\n",
             same?"ok":"FAILED",blended,plain,bitmapRun,passthroughRun,affine16,affine8,affineSub,
-            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff,captureDiff,lazyDiff);
+            objDiff,objectPixels,objOneD,oneDPixels,objSub,subPixels,windowDiff,windowSwapDiff,windowObjDiff,windowPixels,
+            threeRun,256u*192u,backdropRun,backdropOffRun,canvasDiff,graphicsDiff,captureDiff,lazyDiff);
         *control=controlBefore;*bg0=bg0Before;*bg3=bg3Before;*bg1=bg1Before;*hofs=hofsBefore;*vofs=vofsBefore;
         *bldcnt=bldcntBefore;*bldalpha=bldalphaBefore;*master=masterBefore;
         *subControl=subControlBefore;*subBg3=subBg3Before;

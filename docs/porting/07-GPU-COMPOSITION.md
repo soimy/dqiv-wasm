@@ -79,7 +79,8 @@ B2 的**第一段已落地**（`compose2dFragment` + `GpuRenderer::composeScreen
 （4bpp/8bpp、5 种尺寸、优先级、倒置位）、仿射 BG2/BG3（8 位与 16 位图块地图、翻转位、
 PA–PD 矩阵、28 位参考点、溢出回绕、256 色）、256 个文本 OBJ（两种字符映射、两个引擎、
 4bpp/8bpp、翻转、优先级、半透明）、backdrop、BLDCNT 的 alpha/亮度、BLDALPHA、
-BLDY、主亮度；由 `?gpucompose` 选择，未覆盖的态（仿射/位图精灵、窗口、马赛克、扩展调色板、
+BLDY、主亮度、显示窗口（WIN0/WIN1/OBJ 窗口、WININ/WINOUT 的层掩码与效果位）；由
+`?gpucompose` 选择，未覆盖的态（仿射/位图精灵、马赛克、扩展调色板、
 BF 模式 6–7、仿射位图）一律回退 CPU；BG0 画 3D 这条现在也做（把 3D 缩略图当一层：
 BG0 的优先级与水平滚动、图顶字节里五位 alpha 的 `blend(...,5)`、透明像素让给下层），
 没有 3D 图时才回退；显示模式 2 还有一条直通（B2d，见下：屏幕就是本帧捕获的那张 3D 图时，
@@ -391,17 +392,19 @@ recipe 均值 **54**，合成槽 **8**。下屏是 split 的"保留半边"，CPU
 `panels` 因此**仍然留在闸门里**，本轮提交的只是记忆槽的修正（对非面板的 split 帧同样成立，
 那里此前也一样会走散）。
 
-下一轮把两个"少画一层"的候选都实现出来试过，都是**负结果**，已全部回退（不留未验证的行为
-改动）：
+下一轮把两个"少画一层"的候选都实现出来试过，对残差都是**负结果**：
 
 * **显示窗口**（WIN0/WIN1/OBJ 窗口 + WININ/WINOUT 的层掩码与效果位）：`composeSupported`
   此前对显示模式 2 提前放行、根本不管窗口，而 `graphics` 路径画的是窗口掩码之前的层，这在
   原理上确实是一处不一致。把掩码按 `Display::engine` 的规则做进着色器（含 mode 2 精灵的
   OBJ 窗口扫描）后，同帧差异**仍是 14975 像素、包围盒一字不差**——说明这几帧的窗口要么全开，
-  要么不落在有内容的像素上，**不是这条残差的来源**。
+  要么不落在有内容的像素上，**不是这条残差的来源**。它不是残差的来源，却是 B2 scope 里真缺
+  的一块（真实菜单和大世界的每一帧都在写 WININ，只是这些帧本来就被别的理由拒掉），所以在
+  收尾时还是落地了，见"B2 收尾：显示窗口"。
 * **面板下的 3D 采样尺寸**：面板布局里 3D 目标是按面板尺寸（341×256 / 683×384）渲染的，而
   合成器按 256×192 取样，本来会取到画面的一角。改成按 `textureSize` 缩放后，差异**仍然是
-  14975**——残差不在 3D 层。
+  14975**——残差不在 3D 层。这条已回退：缩放会让采样偏离 `Display` 的 `threeSample`，
+  没有用例能表明它更对。
 
 结论：剩下的 4.2% 是**当前那一屏的 2D 层**（recipe plane 0 的最终色，kind=0 的像素）与
 合成结果不同，且集中在文字笔画上。下一步应直接对照这两张 256×192 的图（`compose check slot 4`
@@ -447,14 +450,37 @@ headless 页面加载完就不会再收到 window 的 `focus` 事件，而 `nati
 selfcheck             19 行全绿（末行 PASS），固定行 graphics 0 / canvas 0 of 196608 / capture 0 / lazy 0
 标题 ?gpucompose=probe   compose probe: 240 frames, split, screens 0, main ok 239 [windows 1]
 标题 ?gpucompose=1       compose use: 120 frames presented from the composed screens（累计 240）
-开机菜单（Continue/Create/…）  single，每帧被 `windows` 拒绝：main ok 334 [windows 6626]
-序章洞窟/大世界              joined，呈现闸门按 `layout` 回退；main ok 1871 [windows 23329]
+开机菜单（Continue/Create/…）  single，每帧被 `windows` 拒绝（窗口落地前）：main ok 334 [windows 6626]
+序章洞窟/大世界              joined，呈现闸门按 `layout` 回退；main ok 1871 [windows 23329]（同上，窗口落地前）
 ```
 
 两处新的覆盖事实：**开机菜单撞的是显示窗口（`windows`）而不是布局**——B2 没做窗口，所以这个
 `single` 菜单整条回退；序章洞窟连合成器的 `main ok` 都只有 1871/25200（其余也是 `windows`），
 即真实游戏帧的主要拦路虎是窗口、不是布局。城镇与战斗仍然收不到（没有存档可导入，unattended
 只能开到序章洞窟），那两处样本还是只能上真机。
+
+**B2 收尾：显示窗口（2026-11-01）**。掩码按 `Display::engine:297-305` 的规则做进
+`compose2dFragment`：`inWindow`/`windowMask` 读该引擎自己的 `WININ/WINOUT/WIN0H/V/WIN1H/V`，
+外面取 `WINOUT&63`，OBJ 窗口（OBJ mode 2 精灵的不透明像素）取 `WINOUT>>8`，WIN1 取
+`WININ>>8`，WIN0 最后覆盖取 `WININ&63`；第 5 位是效果位，层循环按低 5 位过滤。展平、半透明、
+亮度这条既有混合链原样保留，只多了"这一像素允不允许效果"的一道门。`composeSupported` 里
+`if(control&0xe000){why="windows";return false;}` 删掉，OBJ mode 2 精灵从"忽略"变成"只当掩码"。
+
+自检加了三组同帧比对，全部对 `Display` 逐像素：
+
+```
+windows 0/0/0 of 16122   WIN0/WIN1 矩形 + 把两个掩码交换的对照 + OBJ 窗口那一组
+                         0/0/0 是差异，16122 是"关窗后变化"的像素数（防"掩码没改变任何东西"的假通过）
+```
+
+固定行因此变成 `windows 0/0/0 of 16122`，其余各行不变。标题的 `compose check` 仍是
+**14975**、包围盒一字不差——与上一节的结论一致：窗口不是那 4.2% 的来源。
+
+覆盖上的收益在真实帧上：开机菜单 `main ok 334/6960 → 384/480`，序章洞窟
+`1871/25200 → 2072/3600`；剩下的拒绝理由变成 `BG0 draws 3D`（这帧没有 3D 图可以当 BG0）和
+子屏的 `affine bitmap background`/`bitmap sprites`（位图底屏，B2 明确未做）。呈现帧数没变：
+菜单落在面板布局（`panels` 仍在闸门里），洞窟是 `joined`。
+
 
 补一条已经能下的结论：**面板布局的 2D 部分不需要新的自检用例**。合成屏是 256×192 的图，
 画布在 `uPlaced` 分支里先算 `cell`（`at*vec2(256,192)+vec2(0,192*s)`）再进 `pixel()`，采用
@@ -474,9 +500,9 @@ selfcheck             19 行全绿（末行 PASS），固定行 graphics 0 / can
    接下的帧数。**probe 只统计、不呈现，所以 `screens` 恒为 0**；真正的呈现帧数看
    `?gpucompose=1` 的 `compose use: N frames presented from the composed screens`。要的是：
    城镇的 `布局` 应落在 `split`（或 `single`），`main ok` 应接近 `N`；`理由` 里不该再出现
-   `display mode 2`（B2 起已支持），剩下的应该只有 `joined/field/battle/menu` 这几类没接的
-   布局、`hd pictures` 和 `windows`（显示窗口没做：开机菜单就撞上它；试过、对 4.2% 的残差
-   无影响、已回退）。
+   `display mode 2`（B2 起已支持）与 `windows`（B2 收尾已支持），剩下的应该只有
+   `joined/field/battle/menu` 这几类没接的布局、`hd pictures`、`BG0 draws 3D`（这一帧没有
+   3D 图可以当 BG0）和 `affine bitmap background`/`bitmap sprites`（位图底屏，未做）。
 2. **再看画面**：同一场景用 `?gpucompose=0` 和 `?gpucompose=1` 各截一张图逐像素比（或肉眼
    比对闪烁/错位）。需要特别看的四处：城镇的下屏（split 的"另一屏保留上一张"）、战斗的
    宽屏两侧与 backdrop、菜单的图标（HD 图应当整条回退，不该出现旧图块）、屏幕最右/最下边
