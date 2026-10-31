@@ -543,12 +543,28 @@ windows 0/0/0 of 16122   WIN0/WIN1 矩形 + 把两个掩码交换的对照 + OBJ
 battle 的 backdrop 3D 在合成屏里是 256×192 的缩略图；split 的另一半显示"那一屏自己的上一张"；
 一段合成帧之后的第一帧软件合成可能旧几帧。
 
+### 验收状态（2026-11-01，本机 headless + SwiftShader）
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| B5-3 Windows CI | 通过 | run `41230259427`：wasm / windows / selfcheck 三绿 |
+| selfcheck | 通过 | 19 行全 ok，含 `windows 0/0/0 of 16122`、`canvas 0 of 196608`、`capture 0`、`lazy 0` |
+| 标题（split） | 通过 | probe `240 frames, split, main ok 239`；`?gpucompose=1` 120 → 240 帧呈现；canvas check 14975/354564（4.2%，全在 3D 层） |
+| 菜单（placed + single） | 通过 | panel check `screen 0, 0 of 49152, screen 1, 0 of 2264`；`?gpucompose=1` 480+ 帧呈现；profile `cap 27 dc 0 dr 0 r3d 247` |
+| 城镇（split/single） | **待设备** | unattended 到不了城镇（序章洞窟是 joined、无存档可导入）；覆盖数字按菜单与标题外推 |
+| 战斗（battle 布局） | **待设备** | 同上；合成器的 backdrop/battle band 分支已有自检（`backdrop3d 0/0`） |
+| 真机 fps（B5-2） | **待设备** | 本机 SwiftShader 只有 36–60 Hz，量不到真机数 |
+
+`joined/field/effect/menu` 四类布局仍整体回退 recipe（`compose use: not composed, layout`），
+这是计划里写明的覆盖边界，不是待办；序章洞窟实测 `main ok 4556/4920`（合成器接得下，闸门按布局拒），
+若以后要接，先从 joined 的两半（上下各一屏、3D 图按半采样）开始。
+
 ## 5. 不在这轮里
 `prep` 1963（3500 三角形 CPU 变换）是独立的一条线：更少的三角形/更省的顶点路径，
 与 B 正交，B 落地后若离 60 还差再动它。
 
 ## 6. 回退
 B1–B4 全部有开关，任一阶段出问题都能退回现路径；CPU 合成代码在 B5 之前不删：
-`?gpucompose=1` 用 GPU 合成的屏（当前只有 `Mode::single` 会走，其余帧自动退回），
+`?gpucompose=1` 用 GPU 合成的屏（single、split 与 placed+single 会走，其余帧自动退回），
 `?gpucompose=probe` 只统计能接的帧与理由（不改画面），`?gpucompose=diff` 再加上每 60 帧
 一次的逐像素比对。
