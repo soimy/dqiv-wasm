@@ -24,9 +24,13 @@ int unkfunc_0207e7e8() {
     // one that does not come back, and it should - it is a real clock. Printing around
     // it so "did we get here" and "did the clock answer" have separate answers.
     static int calls;
-    if(calls<3) {std::cout<<"  unkfunc_0207e7e8: entered\n"; ++calls;}
+    // The pair prints for the first three calls and stops. The counter has to be read
+    // before it is bumped: the first version incremented behind `calls<3` and tested
+    // `calls<=3`, so once the counter reached 3 it printed on every frame.
+    const bool report=calls<3;
+    if(report) std::cout<<"  unkfunc_0207e7e8: entered\n";
     int tick = static_cast<int>(func_02079bf0());
-    if(calls<=3) std::cout<<"  unkfunc_0207e7e8: clock answered, tick "<<tick<<"\n";
+    if(report) {std::cout<<"  unkfunc_0207e7e8: clock answered, tick "<<tick<<"\n";++calls;}
     return tick;
 }
 

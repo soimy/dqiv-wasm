@@ -165,9 +165,12 @@ bool GlobalDQ4::nativeStep() {
     // called exactly once. So this line is where it decides to stop. Printing the
     // state it is deciding on, for the first few calls.
     static int calls=0;
-    if(calls<3) {std::cout<<"nativeStep call "<<calls<<" currentTask_ "<<(currentTask_?"set":"NULL")
+    // Same three-call window as the clock probe in DssRuntime.cpp: read the counter
+    // before bumping it, or `calls<=3` keeps printing for the rest of the session.
+    const bool report=calls<3;
+    if(report) {std::cout<<"nativeStep call "<<calls<<" currentTask_ "<<(currentTask_?"set":"NULL")
               <<" part_id_ "<<part_id_<<" nextPartId_ "<<nextPartId_<<"\n";++calls;}
-    auto stage=[&](const char* what){if(calls<=3)std::cout<<"  nativeStep stage: "<<what<<"\n";};
+    auto stage=[&](const char* what){if(report)std::cout<<"  nativeStep stage: "<<what<<"\n";};
 #endif
     if (!currentTask_) return false;
     unkfunc_02058188(currentTask_);
