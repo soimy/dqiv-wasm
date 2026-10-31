@@ -433,8 +433,28 @@ selfcheck         固定行不变：graphics 0 / canvas 0 of 196608 / capture 0 
 ```
 
 `?gpucompose=check` 的整画面差异仍是 4.2%，但那是**已知且故意的 3D 采样差**；2D 部分在新加的
-`graphics check` 行里单独比对。面板布局 2D 的"有内容"样本要等城镇（当前 unattended 跑进不到
-城镇，CDP 注入 Enter / keyDown + canvas 聚焦两次都无效）。
+`graphics check` 行里单独比对。面板布局 2D 的"有内容"样本要等城镇（unattended 仍然到不了城镇，
+见下）。
+
+**2026-11-01 复测（同一台机，headless Chrome + SwiftShader，DQ4eu.nds）。** 按键这条路这次打通了：
+headless 页面加载完就不会再收到 window 的 `focus` 事件，而 `native/GameWindow.cpp:194` 只在
+`SDL_WINDOW_INPUT_FOCUS` 置位时读键盘 → 按键全被丢掉。按键前在页面里补一对
+`window.dispatchEvent(new Event('blur')); window.dispatchEvent(new Event('focus'));` 就恢复了
+（`Page.bringToFront`、点 canvas 都不管用；`Input.dispatchKeyEvent` 本身是到的，见 06 的坑表）。
+于是这次真的从开机菜单开了一局：
+
+```
+selfcheck             19 行全绿（末行 PASS），固定行 graphics 0 / canvas 0 of 196608 / capture 0 / lazy 0
+标题 ?gpucompose=probe   compose probe: 240 frames, split, screens 0, main ok 239 [windows 1]
+标题 ?gpucompose=1       compose use: 120 frames presented from the composed screens（累计 240）
+开机菜单（Continue/Create/…）  single，每帧被 `windows` 拒绝：main ok 334 [windows 6626]
+序章洞窟/大世界              joined，呈现闸门按 `layout` 回退；main ok 1871 [windows 23329]
+```
+
+两处新的覆盖事实：**开机菜单撞的是显示窗口（`windows`）而不是布局**——B2 没做窗口，所以这个
+`single` 菜单整条回退；序章洞窟连合成器的 `main ok` 都只有 1871/25200（其余也是 `windows`），
+即真实游戏帧的主要拦路虎是窗口、不是布局。城镇与战斗仍然收不到（没有存档可导入，unattended
+只能开到序章洞窟），那两处样本还是只能上真机。
 
 补一条已经能下的结论：**面板布局的 2D 部分不需要新的自检用例**。合成屏是 256×192 的图，
 画布在 `uPlaced` 分支里先算 `cell`（`at*vec2(256,192)+vec2(0,192*s)`）再进 `pixel()`，采用
@@ -450,10 +470,13 @@ selfcheck         固定行不变：graphics 0 / canvas 0 of 196608 / capture 0 
    compose probe: N frames, <布局>, screens M, main ok A [理由 C], sub ok B [理由 D]
    ```
 
-   `布局` 是 `single/split/joined/battle/field/menu/effect`；`screens` 是真正从合成器呈现的
-   帧数。要的是：城镇的 `布局` 应落在 `split`（或 `single`），`screens` 应接近 `N`；`理由`
-   里不该再出现 `display mode 2`（B2 起已支持），剩下的应该只有 `joined/field/battle/menu`
-   这几类没接的布局和 `hd pictures`。
+   `布局` 是 `single/split/joined/battle/field/menu/effect`；`main ok A` 是这 N 帧里合成器
+   接下的帧数。**probe 只统计、不呈现，所以 `screens` 恒为 0**；真正的呈现帧数看
+   `?gpucompose=1` 的 `compose use: N frames presented from the composed screens`。要的是：
+   城镇的 `布局` 应落在 `split`（或 `single`），`main ok` 应接近 `N`；`理由` 里不该再出现
+   `display mode 2`（B2 起已支持），剩下的应该只有 `joined/field/battle/menu` 这几类没接的
+   布局、`hd pictures` 和 `windows`（显示窗口没做：开机菜单就撞上它；试过、对 4.2% 的残差
+   无影响、已回退）。
 2. **再看画面**：同一场景用 `?gpucompose=0` 和 `?gpucompose=1` 各截一张图逐像素比（或肉眼
    比对闪烁/错位）。需要特别看的四处：城镇的下屏（split 的"另一屏保留上一张"）、战斗的
    宽屏两侧与 backdrop、菜单的图标（HD 图应当整条回退，不该出现旧图块）、屏幕最右/最下边
