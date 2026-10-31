@@ -488,6 +488,7 @@ uint windowByte(vec4 bases,vec4 sizes,int offset) {
     int physical=base+within;
     return texelFetch(uVram,ivec2(physical&1023,physical>>10),0).r;
 }
+)" R"(
 // The two regions an engine reads, each masked to its own length the way
 // Display::engine masks: 512 KB of backgrounds and 256 KB of sprites on engine
 // A, 128 KB of each on engine B.
