@@ -422,7 +422,8 @@ plane 0 逐像素比，并按 plane 0 的 alpha（recipe 的 kind）分类。结
 这把问题定性了：**合成器的 2D 合成是对的，面板布局的残差是 3D 层分辨率**，与
 "battle 的 backdrop 3D 在合成屏里是 256×192 缩略图"同一类**故意差异**。因此要让 `panels`
 进闸门，应先让 check 只统计 kind=0 的 2D 像素（或在 3D kind 上允许采样差），而不是继续
-追 2D 层的"少画一层"——那条线已经排除。
+追 2D 层的"少画一层"——那条线已经排除。这件事第二天做完了：`graphics check panel` 就是
+kind=0 的逐像素比对（两屏都是 0），`panels` 随后对 single 帧放开，见 2026-11-01 那两段。
 
 **本机已经量到的验收数字（2026-10-30，headless Chrome + SwiftShader，DQ4eu.nds）**
 
@@ -439,11 +440,29 @@ selfcheck         固定行不变：graphics 0 / canvas 0 of 196608 / capture 0 
 `graphics check` 行里单独比对。
 
 **面板布局的 2D 样本已经拿到，不必等城镇（2026-11-01）**：`?gpucompose=check` 现在对
-"placed + single"的帧（开机菜单就是这一类；呈现仍被 `panels` 闸门挡着）额外把主引擎的图画进
-槽 4，按 kind=0 比对后打一行 `graphics check panel: screen 0, N of M 2D pixels differ`。
-实测两个菜单画面：开档槽列表 `0 of 3645 / 3665 / 3656`，开机菜单 `0 of 2273 / 2264`
-（M 随光标闪烁与时钟的帧变化）——**差异恒为 0、worst step 0**：面板布局的 2D 层与 `Display`
-逐像素一致。这一行只在 check 模式里构图，槽 4 只被读、不呈现，`layout_.composed` 不动。
+"placed + single"的帧（开机菜单就是这一类）按 single 的呈现路径把**两屏**都合成进槽 2/3，
+再与 `display_.recipes()` 的 kind=0 像素逐像素比，打一行
+`graphics check panel: screen 0, N of M, screen 1, P of Q 2D pixels differ, worst step W`。
+实测两个菜单画面：开档槽列表 `0 of 3645 / 3665 / 3656`，开机菜单
+`screen 0, 0 of 49152, screen 1, 0 of 2264`（M 随光标闪烁与时钟的帧变化）——**差异恒为 0、
+worst step 0**：面板布局两屏的 2D 层都与 `Display` 逐像素一致。
+
+**`panels` 闸门因此对 single 帧放开了（2026-11-01）**：`mode==Mode::single && layout_.placed`
+的帧现在和别的 single 帧一样合成、按 `layout_.composed={2,3}` 在两个面板矩形里呈现；其它
+面板帧仍由 `layout` 那一行拒掉。实测（DQ4eu.nds，headless + SwiftShader）：
+
+```
+?gpucompose=probe  开机菜单 single：main ok 3616 [BG0 draws 3D 944]（4560 帧）
+                   （`windows` 落地前同一画面是 main ok 334 [windows 6626]）
+?gpucompose=1      开机菜单：compose use: 480 frames presented from the composed screens
+                   （此前这里一帧都不合成）
+profile（同一菜单帧）f 2763 cap 27 dc 0 dr 0 r3d 247 prep 0 tex 0 pres 297
+                   面板布局里 CPU 合成本来是 cap 5960 dc 3780 dr 2113
+```
+
+故意差异多一条：面板布局里若有 3D 背景（菜单叠在片尾 3D 上那种帧），合成路径把 3D 烘成
+256×192 再放大，画布级 `compose check` 在这样的帧上是 `97668 of 312228 differ`（31%）——
+与 battle 的 backdrop 同一类采样差，纯 2D 的菜单帧则逐像素一致。
 
 **2026-11-01 复测（同一台机，headless Chrome + SwiftShader，DQ4eu.nds）。** 按键这条路这次打通了：
 headless 页面加载完就不会再收到 window 的 `focus` 事件，而 `native/GameWindow.cpp:194` 只在
@@ -484,8 +503,9 @@ windows 0/0/0 of 16122   WIN0/WIN1 矩形 + 把两个掩码交换的对照 + OBJ
 
 覆盖上的收益在真实帧上：开机菜单 `main ok 334/6960 → 384/480`，序章洞窟
 `1871/25200 → 2072/3600`；剩下的拒绝理由变成 `BG0 draws 3D`（这帧没有 3D 图可以当 BG0）和
-子屏的 `affine bitmap background`/`bitmap sprites`（位图底屏，B2 明确未做）。呈现帧数没变：
-菜单落在面板布局（`panels` 仍在闸门里），洞窟是 `joined`。
+子屏的 `affine bitmap background`/`bitmap sprites`（位图底屏，B2 明确未做）。呈现帧数当时没变：
+菜单落在面板布局（`panels` 还在闸门里），洞窟是 `joined`；其中菜单这一条随后就放开了，
+见上面的"`panels` 闸门因此对 single 帧放开了"。
 
 
 补一条已经能下的结论：**面板布局的 2D 部分不需要新的自检用例**。合成屏是 256×192 的图，

@@ -244,13 +244,10 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     else if(layout_.sides)screenReason="sides";
     else if(layout_.band)screenReason="band";
     else if(layout_.inset[2]>0)screenReason="inset";
-    // Panel layouts keep each screen's own last picture (screenRecipes_/seen_); the
-    // composed path recomputes the current one and does not match (docs/porting/07).
-    // Panel layouts present the same two composed pictures split does; the 2D layer
-    // is the same one (the check compares it kind by kind). A single frame's panel
-    // picture comes from the display mode's own source instead, which the composed
-    // path has only been checked on outside this layout (docs/porting/07).
-    else if(layout_.placed&&mode!=Mode::split)screenReason="panels";
+    // A single frame in the panel layout composes both screens and presents them in
+    // the two panel rectangles: check mode compares those two pictures with the
+    // recipes' 2D pixels, and both come out at zero (docs/porting/07). A panel frame
+    // that is neither single nor split is refused by the layout test below.
     else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
     // The main engine's graphics picture on its own, every graphics-layout frame:
     // the half the split layout gives the engine's screen is this frame's picture
@@ -442,33 +439,44 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             }
         }
     }
-    // A placed single frame - the boot menu is one - stays with the recipes, but the
-    // check mode can build the engine's picture in slot 4 anyway and compare its 2D
-    // layer, which is the panel layout's "content" sample and the menu leg of the
-    // four-scene regression. Nothing here reaches what the player sees: slot 4 is
-    // read, never presented, and layout_.composed is untouched (docs/porting/07).
+    // A placed single frame - the boot menu is one - composes like any single frame;
+    // check mode builds both screens the way the single path would present them and
+    // compares their 2D layers, which is the panel layout's "content" sample and the
+    // menu leg of the four-scene regression. Nothing here reaches what the player
+    // sees: slots 2 and 3 are only read, and layout_.composed is left alone.
     if(diag::composeCheck&&checkFrame_&&mode==Mode::single&&layout_.placed) {
         const bool ready=window_.gpu().nativePictureReady();
+        const unsigned picture=ready?window_.gpu().nativeTexture():0;
         std::string panelWhy;
-        if(window_.gpu().composeScreen(video,false,display_,panelWhy,ready?window_.gpu().nativeTexture():0,
-                false,false,true,4)) {
-            const auto gpu=window_.gpu().readScreenSlot(4);
-            const auto main=display_.mainGraphicsRecipes();
-            unsigned pixels=0,different=0,worst=0;
-            for(unsigned p=0;p<screenPixels;++p) {
-                const unsigned r=main[p];
-                if(r>>24)continue;   // kind 0 is a plain 2D pixel; 3D stays out (B3)
-                ++pixels;
-                const unsigned a=gpu[p]&0xffffffu,b=r&0xffffffu;
-                if(a==b)continue;
-                ++different;
-                for(unsigned shift=0;shift<24;shift+=8) {
-                    const unsigned x=(a>>shift)&255,y=(b>>shift)&255;
-                    worst=std::max(worst,x>y?x-y:y-x);
+        // The same composition the single path would present, so the two screens a
+        // placed presentation would show are the two compared here.
+        const bool composed=window_.gpu().composeScreen(video,false,display_,panelWhy,picture,false,false,false,
+                mainTop?2:3)&&
+            window_.gpu().composeScreen(video,true,display_,panelWhy,picture,false,false,false,
+                mainTop?3:2);
+        if(composed) {
+            const auto& all=display_.recipes();
+            const auto topPicture=window_.gpu().readScreenSlot(2);
+            const auto bottomPicture=window_.gpu().readScreenSlot(3);
+            unsigned pixels[2]={0,0},different[2]={0,0},worst=0;
+            for(unsigned s=0;s<2;++s) {
+                const auto& gpu=s?bottomPicture:topPicture;
+                const unsigned base=s?screenPixels:0u;
+                for(unsigned p=0;p<screenPixels;++p) {
+                    const unsigned r=all[base+p];
+                    if(r>>24)continue;   // kind 0 is a plain 2D pixel; 3D stays out (B3)
+                    ++pixels[s];
+                    const unsigned a=gpu[p]&0xffffffu,b=r&0xffffffu;
+                    if(a==b)continue;
+                    ++different[s];
+                    for(unsigned shift=0;shift<24;shift+=8) {
+                        const unsigned x=(a>>shift)&255,y=(b>>shift)&255;
+                        worst=std::max(worst,x>y?x-y:y-x);
+                    }
                 }
             }
-            std::printf("graphics check panel: screen 0, %u of %u 2D pixels differ, worst step %u\n",
-                different,pixels,worst);
+            std::printf("graphics check panel: screen 0, %u of %u, screen 1, %u of %u 2D pixels differ, worst step %u\n",
+                different[0],pixels[0],different[1],pixels[1],worst);
         } else std::printf("graphics check panel: the compositor refused this frame [%s]\n",
             panelWhy.c_str());
     }
