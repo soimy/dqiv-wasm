@@ -28,7 +28,10 @@ headers=re.findall(r'#define DQIV_GLSL_HEADER "([^"]*)"',text)
 if len(headers)!=2:
     sys.exit(f"expected the two DQIV_GLSL_HEADER definitions in {SOURCE}, found {len(headers)}")
 ES_HEADER,DESKTOP_HEADER=[h.encode().decode("unicode_escape") for h in headers]
-matches=re.findall(r'const char\* (\w+)=DQIV_GLSL_HEADER R"\((.*?)\)";',text,re.S)
+# A body may be split over several adjacent raw literals: MSVC truncates one
+# string literal over 16 KB, and the 2D compositor grew past that.
+matches=re.findall(r'const char\* (\w+)=DQIV_GLSL_HEADER ((?:R"\(.*?\)"\s*)+);',text,re.S)
+matches=[(name,"".join(re.findall(r'R"\((.*?)\)"',body,re.S))) for name,body in matches]
 if len(matches)!=10:
     sys.exit(f"expected 10 shaders in {SOURCE}, found {len(matches)}")
 
