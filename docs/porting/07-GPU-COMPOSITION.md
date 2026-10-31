@@ -436,8 +436,14 @@ selfcheck         固定行不变：graphics 0 / canvas 0 of 196608 / capture 0 
 ```
 
 `?gpucompose=check` 的整画面差异仍是 4.2%，但那是**已知且故意的 3D 采样差**；2D 部分在新加的
-`graphics check` 行里单独比对。面板布局 2D 的"有内容"样本要等城镇（unattended 仍然到不了城镇，
-见下）。
+`graphics check` 行里单独比对。
+
+**面板布局的 2D 样本已经拿到，不必等城镇（2026-11-01）**：`?gpucompose=check` 现在对
+"placed + single"的帧（开机菜单就是这一类；呈现仍被 `panels` 闸门挡着）额外把主引擎的图画进
+槽 4，按 kind=0 比对后打一行 `graphics check panel: screen 0, N of M 2D pixels differ`。
+实测两个菜单画面：开档槽列表 `0 of 3645 / 3665 / 3656`，开机菜单 `0 of 2273 / 2264`
+（M 随光标闪烁与时钟的帧变化）——**差异恒为 0、worst step 0**：面板布局的 2D 层与 `Display`
+逐像素一致。这一行只在 check 模式里构图，槽 4 只被读、不呈现，`layout_.composed` 不动。
 
 **2026-11-01 复测（同一台机，headless Chrome + SwiftShader，DQ4eu.nds）。** 按键这条路这次打通了：
 headless 页面加载完就不会再收到 window 的 `focus` 事件，而 `native/GameWindow.cpp:194` 只在
@@ -503,6 +509,8 @@ windows 0/0/0 of 16122   WIN0/WIN1 矩形 + 把两个掩码交换的对照 + OBJ
    `display mode 2`（B2 起已支持）与 `windows`（B2 收尾已支持），剩下的应该只有
    `joined/field/battle/menu` 这几类没接的布局、`hd pictures`、`BG0 draws 3D`（这一帧没有
    3D 图可以当 BG0）和 `affine bitmap background`/`bitmap sprites`（位图底屏，未做）。
+   菜单这类 placed+single 的帧另看 `?gpucompose=check` 的
+   `graphics check panel: screen 0, N of M 2D pixels differ`（N 应为 0）。
 2. **再看画面**：同一场景用 `?gpucompose=0` 和 `?gpucompose=1` 各截一张图逐像素比（或肉眼
    比对闪烁/错位）。需要特别看的四处：城镇的下屏（split 的"另一屏保留上一张"）、战斗的
    宽屏两侧与 backdrop、菜单的图标（HD 图应当整条回退，不该出现旧图块）、屏幕最右/最下边
