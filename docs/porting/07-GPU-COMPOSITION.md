@@ -550,6 +550,7 @@ battle 的 backdrop 3D 在合成屏里是 256×192 的缩略图；split 的另�
 | B5-3 Windows CI | 通过 | run `41230259427`：wasm / windows / selfcheck 三绿 |
 | selfcheck | 通过 | 19 行全 ok，含 `windows 0/0/0 of 16122`、`canvas 0 of 196608`、`capture 0`、`lazy 0` |
 | 标题（split） | 通过 | probe `240 frames, split, main ok 239`；`?gpucompose=1` 120 → 240 帧呈现；canvas check 14975/354564（4.2%，全在 3D 层） |
+| 两路逐像素（`?gpucompose=diff`） | 通过 | 110 次屏幕比对 `0 differ`，覆盖标题 split、菜单 placed+single、世界 joined 的 2D 帧（约 6600 帧，每 60 帧一比对；故意差异的两类——backdrop 3D 与捕获直通——按设计跳过） |
 | 菜单（placed + single） | 通过 | panel check `screen 0, 0 of 49152, screen 1, 0 of 2264`；`?gpucompose=1` 480+ 帧呈现；profile `cap 27 dc 0 dr 0 r3d 247` |
 | 城镇（split/single） | **待设备** | unattended 到不了城镇（序章洞窟是 joined、无存档可导入）；覆盖数字按菜单与标题外推 |
 | 战斗（battle 布局） | **待设备** | 同上；合成器的 backdrop/battle band 分支已有自检（`backdrop3d 0/0`） |
@@ -567,4 +568,5 @@ battle 的 backdrop 3D 在合成屏里是 256×192 的缩略图；split 的另�
 B1–B4 全部有开关，任一阶段出问题都能退回现路径；CPU 合成代码在 B5 之前不删：
 `?gpucompose=1` 用 GPU 合成的屏（single、split 与 placed+single 会走，其余帧自动退回），
 `?gpucompose=probe` 只统计能接的帧与理由（不改画面），`?gpucompose=diff` 再加上每 60 帧
-一次的逐像素比对。
+一次的逐像素比对，并每 10 次比对打一行 `compose diff: N screen comparisons, M differ`
+——静默的"零差异"不算证据，有人得能看出比对真的跑过。

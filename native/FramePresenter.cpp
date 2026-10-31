@@ -502,6 +502,9 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop,Mode mode) 
         else ++probeReasons_[engine][why];
     }
     if(diag::composeDiff&&probeFrames_%60==0) {
+        // Silent equality is not evidence: a summary every ten comparisons says the
+        // comparison ran, and how many screens it took in (docs/porting/07).
+        static unsigned compared=0,differing=0;
         for(unsigned engine=0;engine<2;++engine) {
             std::string why;
             if(!window_.gpu().composeScreen(video,engine!=0,display_,why,engine==0?picture:0,
@@ -511,14 +514,20 @@ void FramePresenter::probeComposition(NitroVideo& video,bool mainTop,Mode mode) 
             // has no 3D), and the capture passthrough (it samples this frame's
             // picture; the bank Display reads holds the one captured last frame).
             if(bake||capture!=0)continue;
+            ++compared;
             const auto gpu=window_.gpu().readScreen(engine!=0);
             const auto cpu=display_.pixels();
             const std::size_t at=((engine==0)==mainTop)?0:std::size_t(256)*192;
             unsigned different=0;
             for(std::size_t i=0;i<std::size_t(256)*192;++i)if(gpu[i]!=cpu[at+i])++different;
-            if(different)std::printf("compose diff: engine %u frame %u, %u of 49152 differ\n",
-                engine,probeFrames_,different);
+            if(different) {
+                ++differing;
+                std::printf("compose diff: engine %u frame %u, %u of 49152 differ\n",
+                    engine,probeFrames_,different);
+            }
         }
+        if(probeFrames_%600==0)
+            std::printf("compose diff: %u screen comparisons, %u differ\n",compared,differing);
     }
     if(probeFrames_%120==0) {
         // The layout matters as much as the registers: split and its relatives show
