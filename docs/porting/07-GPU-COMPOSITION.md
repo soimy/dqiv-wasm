@@ -561,6 +561,11 @@ joined（一帧 256×384 的 3D 场景跨两屏），原先整条回退。接上
 `from>3||to>3`，而 `screens_` 已经是 7 个——槽 5/6 从来没被写过。split 的 kept 半边同样
 是空的（一直显示黑），只是此前没人逐像素看过。改成按 `std::size(screens_)` 判界。
 
+**真实游戏帧的连续样本**：开机后不按键、让 attract 演示（就是游戏内实拍的片段）跑 4 分钟，
+`?gpucompose=diff` 下 joined 帧从 6120 一路到 7080 帧都是 `main ok 7199/7200`（只有 1 帧因
+`BG0 draws 3D` 回退），期间 `compose diff: 120 screen comparisons, 0 differ`——这是真实
+world 帧上的逐像素零差异，不是自检构造的场景。
+
 实测（DQ4eu.nds，headless + SwiftShader）：标题 `compose use: 2760/2880 frames presented`，
 两半（logo 屏 + 龙/飞船 3D）与 recipe 一致；序章洞窟 `compose probe: 6360 frames, joined,
 main ok 5629 [BG0 draws 3D 731]`、`compose use: 4440 frames presented`、同帧
@@ -581,7 +586,7 @@ main ok 5629 [BG0 draws 3D 731]`、`compose use: 4440 frames presented`、同帧
 | selfcheck | 通过 | 19 行全 ok，含 `windows 0/0/0 of 16122`、`canvas 0 of 196608`、`capture 0`、`lazy 0` |
 | 标题（split） | 通过 | probe `240 frames, split, main ok 239`；`?gpucompose=1` 120 → 240 帧呈现；canvas check 14975/354564（4.2%，全在 3D 层） |
 | 世界（joined） | 通过（本机） | 标题 `compose use: 2760/2880`；洞窟 `main ok 5629/6360`、`4440 frames presented`、同帧 2D `0 of 0`、整画面与 recipe 差 ≈1200 px（0.3%，3D 采样）；捕获是混合所以 CPU 合成仍在跑 |
-| 两路逐像素（`?gpucompose=diff`） | 通过 | 110 次屏幕比对 `0 differ`，覆盖标题 split、菜单 placed+single、世界 joined 的 2D 帧（约 6600 帧，每 60 帧一比对；故意差异的两类——backdrop 3D 与捕获直通——按设计跳过） |
+| 两路逐像素（`?gpucompose=diff`） | 通过 | 120 次屏幕比对 `0 differ`（attract 的 joined 帧连跑 4 分钟；另有 110 次的早期一轮），覆盖标题 split、菜单 placed+single、世界 joined 的 2D 帧（约 6600 帧，每 60 帧一比对；故意差异的两类——backdrop 3D 与捕获直通——按设计跳过） |
 | 菜单（placed + single） | 通过 | panel check `screen 0, 0 of 49152, screen 1, 0 of 2264`；`?gpucompose=1` 480+ 帧呈现；profile `cap 27 dc 0 dr 0 r3d 247` |
 | 城镇（split/single） | **待设备** | unattended 到不了城镇（序章洞窟是 joined、无存档可导入）；覆盖数字按菜单与标题外推 |
 | 战斗（battle 布局） | **待设备** | 同上；合成器的 backdrop/battle band 分支已有自检（`backdrop3d 0/0`） |
