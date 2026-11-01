@@ -223,6 +223,9 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     if(native3d)window_.gpu().readNative(native3d_,true,source);
     else if(capturing&&!fieldInset)window_.gpu().readNative(native3d_,false,source,screen);
     else native3d_.clear();
+    // A joined composition needs this frame's own half of the 3D picture; if the
+    // frame reduced none (the game was not capturing), it has nothing to show.
+    const bool reducedThisFrame=native3d||(capturing&&!fieldInset);
     display_.setWorldBackground(mode==Mode::menu);
     display_.setBand(mode==Mode::battle&&wideBattleFrame());
     const bool probing=diag::composeProbe||diag::composeDiff;
@@ -240,15 +243,26 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // The compositor's own refusal: it has to outlive the call that fills it
     // (screenReason may point into it).
     std::string why;
+    // A joined frame presents its two screens the way split does, but its halves
+    // come from consecutive frames, so during a fade their master brightness can
+    // differ by a step and the recipes patch the join. Such a frame keeps with them.
+    // The columns beside the screens are drawn from the 3D scene by the canvas
+    // shader, which needs no recipes (native/GpuRenderer.cpp, composedPixel).
+    auto fading=[&](unsigned base) {
+        const unsigned control=*static_cast<unsigned*>(video.reg(base,4));
+        const unsigned master=*static_cast<unsigned short*>(video.reg(base+0x6c,2));
+        return !(control&128)&&(((master>>14)&3)||(master&31));
+    };
+    const bool joinedComposed=mode==Mode::joined&&reducedThisFrame&&!fading(0x04000000)&&!fading(0x04001000);
     if(pc::hdPicturesLoaded())screenReason="hd pictures";
-    else if(layout_.sides)screenReason="sides";
+    else if(layout_.sides&&!joinedComposed)screenReason="sides";
     else if(layout_.band)screenReason="band";
     else if(layout_.inset[2]>0)screenReason="inset";
     // A single frame in the panel layout composes both screens and presents them in
     // the two panel rectangles: check mode compares those two pictures with the
     // recipes' 2D pixels, and both come out at zero (docs/porting/07). A panel frame
     // that is neither single nor split is refused by the layout test below.
-    else if(mode!=Mode::single&&mode!=Mode::split)screenReason="layout";
+    else if(mode!=Mode::single&&mode!=Mode::split&&!joinedComposed)screenReason="layout";
     // The main engine's graphics picture on its own, every graphics-layout frame:
     // the half the split layout gives the engine's screen is this frame's picture
     // (slot 4). Slots 5 and 6 keep the picture each screen had when the engine last
@@ -258,8 +272,8 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     std::string memoryWhy;
     if(diag::composeUse&&graphicsLayout) {
         const bool ready=window_.gpu().nativePictureReady();
-        composedSlot_[4]=window_.gpu().composeScreen(video,false,display_,memoryWhy,
-            ready?window_.gpu().nativeTexture():0,false,false,true,4);
+        const unsigned picture=ready?(joinedComposed?window_.gpu().nativeThisFrame():window_.gpu().nativeTexture()):0;
+        composedSlot_[4]=window_.gpu().composeScreen(video,false,display_,memoryWhy,picture,false,false,true,4);
     }
     if(diag::composeUse&&!*screenReason) {
         const bool ready=window_.gpu().nativePictureReady();
@@ -273,9 +287,9 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
                     mainTop?3:2);
             if(screens)layout_.composed={2,3};
         } else {
-            // Split shows the main engine's graphics one DS screen at a time: this
-            // frame's picture in the half the engine drives, and in the other half
-            // the picture that screen kept from when the engine was there.
+            // Split and joined show the main engine's graphics one DS screen at a
+            // time: this frame's picture in the half the engine drives, and in the
+            // other half the picture that screen kept from when the engine was there.
             screens=composedSlot_[4];
             if(screens) {
                 const int otherScreen=screen^1;
@@ -315,7 +329,7 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
             ", 3D %zu px mean %llu, rects %.0fx%.0f %.0fx%.0f\n",
             modeName[unsigned(mode)%7],mainTop?1:0,layout_.placed?1:0,layout_.composed[0],
             *screenReason?screenReason:"?",control,subControl,cap,
-            display_.captureDeferrable(video)?1:0,display_.showsThreeCapture(video)?1:0,
+            display_.captureDeferrable(video,true)?1:0,display_.showsThreeCapture(video)?1:0,
             native3d_.size(),native3d_.empty()?0ull:three/(native3d_.size()*3),
             layout_.threeRects[0][2],layout_.threeRects[0][3],layout_.threeRects[1][2],layout_.threeRects[1][3]);
     }
@@ -325,8 +339,15 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     // callback outlives neither of the two objects it uses (both belong to the
     // window), and every read of that VRAM region goes through materialise().
     bool captureDeferred=false;
-    if(!checkFrame_&&screens&&!probing&&window_.gpu().nativePictureReady()&&display_.captureDeferrable(video)) {
-        window_.gpu().capturePicture(window_.gpu().nativeTexture());
+    // The game captures either the 3D screen (the reduced picture) or the engine's
+    // own 2D composition (the composed screen, slot 4): both are pictures the GPU
+    // has, so neither needs Display's loop.
+    const bool graphicsCapture=(captureControl&(1u<<24))==0;
+    const unsigned capturePicture_=graphicsCapture
+        ?(composedSlot_[4]?window_.gpu().screenSlotTexture(composedSlot_[4]):0)
+        :(window_.gpu().nativePictureReady()?window_.gpu().nativeTexture():0);
+    if(!checkFrame_&&screens&&!probing&&capturePicture_&&display_.captureDeferrable(video,true)) {
+        window_.gpu().capturePicture(capturePicture_);
         video.setCaptureSource([this](std::uint16_t* pixels,std::size_t count) {
             window_.gpu().readCaptureInto(pixels,count);
         });
@@ -354,13 +375,12 @@ void FramePresenter::frame(NitroVideo& video,const GxGeometry& geometry,const Gx
     if(mode==Mode::joined||mode==Mode::split||mode==Mode::field||mode==Mode::effect) {
         // The main engine's graphics, before its display mode selects the capture.
         const auto main=display_.mainGraphicsRecipes();
-        if(!screens||checkFrame_) {
-            screenRecipes_[screen].assign(main.begin(),main.end());
-            // The book just moved: the screen's kept slot takes this frame's picture
-            // too, or nothing if the compositor could not build it.
-            composedSlot_[5+screen]=composedSlot_[4];
-            if(composedSlot_[5+screen])window_.gpu().copyScreenSlot(4,5+screen);
-        }
+        if(!screens||checkFrame_)screenRecipes_[screen].assign(main.begin(),main.end());
+        // The screen's kept slot follows this frame's picture whether or not the frame
+        // moved the book: the other half of a split or joined canvas shows it next
+        // frame, so it cannot wait for a frame the compositor refused.
+        composedSlot_[5+screen]=composedSlot_[4];
+        if(composedSlot_[5+screen])window_.gpu().copyScreenSlot(4,5+screen);
         seen_[screen]=true;
         if(diag::composeCheck&&checkFrame_&&composedSlot_[4]) {
             // The compositor's 2D picture against the recipes' own, on the pixels the

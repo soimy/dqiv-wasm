@@ -290,6 +290,14 @@ vec3 brightness(vec3 color,float code) {
 int rowFirst=0,rowLast=383;
 bool insetCell=false;
 vec3 composedPixel(ivec2 cell) {
+    // Beside the screens the two composed pictures say nothing: the recipes show the
+    // 3D scene there (through the effects of the nearest column, which a composed
+    // frame has not got), so show it straight. Frames with a fade stay with the
+    // recipes before they get here (native/FramePresenter.cpp).
+    if(!insetCell&&(cell.x<0||cell.x>255)) {
+        if(uSides==0)return vec3(0.0);
+        return three.a>0.0?three.rgb/three.a:vec3(0.0);
+    }
     int row=cell.y;
     int y=row<192?row:row-192;
     vec2 uv=vec2((float(clamp(cell.x,0,255))+0.5)/256.0,1.0-(float(y)+0.5)/192.0);
@@ -1537,7 +1545,10 @@ std::vector<std::uint16_t> GpuRenderer::readCapture() {
     return words;
 }
 void GpuRenderer::copyScreenSlot(int from,int to) {
-    if(from<0||from>3||to<0||to>3||from==to||!screens_[from].framebuffer)return;
+    // Every target: 0/1 are the two engines' screens, 2-6 the composed slots
+    // (docs/porting/07, stage B3). The bounds were 3 while there were only four.
+    const int count=int(std::size(screens_));
+    if(from<0||from>=count||to<0||to>=count||from==to||!screens_[from].framebuffer)return;
     resize(screens_[to],256,192,false,false);
     gl::BindFramebuffer(GL_READ_FRAMEBUFFER,screens_[from].framebuffer);
     gl::BindFramebuffer(GL_DRAW_FRAMEBUFFER,screens_[to].framebuffer);

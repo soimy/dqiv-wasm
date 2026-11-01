@@ -116,6 +116,13 @@ public:
     // can show it where display mode 2 shows its capture instead of the VRAM the
     // capture was written into (stage B2d).
     unsigned nativeTexture() const {return native_[nativeSlot_^1].color;}
+    // This frame's own reduction, drawn when its scene was queued: a joined frame
+    // composes its half of the 3D picture from this one, not from the previous
+    // frame's (that is the other screen's half).
+    unsigned nativeThisFrame() const {return native_[nativeSlot_].color;}
+    // A composed screen's texture (slots 2-6), for the capture unit when the game
+    // captures the engine's own composition rather than the 3D screen.
+    unsigned screenSlotTexture(int slot) const {return screens_[slot].color;}
     // Stage B4: the framebuffer's capture of that picture, as the two bytes a
     // captured VRAM bank holds (15-bit colour, bit 15 = the pixel was opaque).
     void capturePicture(unsigned picture);

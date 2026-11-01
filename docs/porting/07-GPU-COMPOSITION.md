@@ -543,6 +543,36 @@ windows 0/0/0 of 16122   WIN0/WIN1 矩形 + 把两个掩码交换的对照 + OBJ
 battle 的 backdrop 3D 在合成屏里是 256×192 的缩略图；split 的另一半显示"那一屏自己的上一张"；
 一段合成帧之后的第一帧软件合成可能旧几帧。
 
+**`joined` 布局也由合成器呈现（2026-11-01，计划外但收益最大）**：世界地图/序章洞窟就是
+joined（一帧 256×384 的 3D 场景跨两屏），原先整条回退。接上它要三件事：
+
+- **闸门**：joined 只在两件事同时成立时放行——本帧真的把 3D 的**自己那一半**减到了
+  `native_` 里（`reducedThisFrame`），且两个引擎都没有淡入淡出（`MASTER_BRIGHT` 的
+  brightness/evy 都为 0）。淡入淡出时两半取自相邻帧，亮度会差一档，recipe 路径专门补过；
+  那个年代的帧继续走 recipe。
+- **两半怎么对应**：合成槽 4 是"主引擎这一帧的图"，槽 5/6 是每一屏在它自己的帧上留下的
+  图。joined 的两半就是 `layout_.composed={screen==0?4:5+other, ...}`，和 split 的呈现
+  是同一段代码。**每半必须用同一帧的 reduce**（`nativeThisFrame()`）——用上一帧的
+  `nativeTexture()` 会拿到另一屏的那一半，画出来就是上下黑一半。
+- 画布宽于 256 时两侧列没有合成图，`composedPixel` 直接按 3D 采样画（`uSides`），所以
+  joined 在 256 宽画布上也能和 recipe 一致。
+
+顺带修掉一个**旧 bug**：`GpuRenderer::copyScreenSlot` 的边界还是"只有 4 个 target"时代的
+`from>3||to>3`，而 `screens_` 已经是 7 个——槽 5/6 从来没被写过。split 的 kept 半边同样
+是空的（一直显示黑），只是此前没人逐像素看过。改成按 `std::size(screens_)` 判界。
+
+实测（DQ4eu.nds，headless + SwiftShader）：标题 `compose use: 2760/2880 frames presented`，
+两半（logo 屏 + 龙/飞船 3D）与 recipe 一致；序章洞窟 `compose probe: 6360 frames, joined,
+main ok 5629 [BG0 draws 3D 731]`、`compose use: 4440 frames presented`、同帧
+`graphics check: screen 0, 0 of 0 2D pixels differ`（该帧整屏是 3D）、与 recipe 的整画面
+差 ≈1200 px（0.3%，全在 3D 采样与边缘，HUD 之外）。
+
+**还没省下的 CPU**：世界的捕获是"3D + 图形"混合（洞窟 `cap c0330010`，bits 29-30 = 2），
+`Display::captureDeferrable` 只放行"源单一"的捕获，所以这些帧仍跑完整 CPU 合成
+（profile `f 8853 cap 5403 dc 3267 dr 1087 r3d 1703 pres 220`）。B4 的延后路径现在也接受
+"图形源"（槽 4 当捕获源），但这游戏的世界捕获是混合，用不到；要省掉这段 CPU 得在
+`captureFragment` 里补混合语义。
+
 ### 验收状态（2026-11-01，本机 headless + SwiftShader）
 
 | 项 | 状态 | 证据 |
@@ -550,15 +580,16 @@ battle 的 backdrop 3D 在合成屏里是 256×192 的缩略图；split 的另�
 | B5-3 Windows CI | 通过 | run `41230259427`：wasm / windows / selfcheck 三绿 |
 | selfcheck | 通过 | 19 行全 ok，含 `windows 0/0/0 of 16122`、`canvas 0 of 196608`、`capture 0`、`lazy 0` |
 | 标题（split） | 通过 | probe `240 frames, split, main ok 239`；`?gpucompose=1` 120 → 240 帧呈现；canvas check 14975/354564（4.2%，全在 3D 层） |
+| 世界（joined） | 通过（本机） | 标题 `compose use: 2760/2880`；洞窟 `main ok 5629/6360`、`4440 frames presented`、同帧 2D `0 of 0`、整画面与 recipe 差 ≈1200 px（0.3%，3D 采样）；捕获是混合所以 CPU 合成仍在跑 |
 | 两路逐像素（`?gpucompose=diff`） | 通过 | 110 次屏幕比对 `0 differ`，覆盖标题 split、菜单 placed+single、世界 joined 的 2D 帧（约 6600 帧，每 60 帧一比对；故意差异的两类——backdrop 3D 与捕获直通——按设计跳过） |
 | 菜单（placed + single） | 通过 | panel check `screen 0, 0 of 49152, screen 1, 0 of 2264`；`?gpucompose=1` 480+ 帧呈现；profile `cap 27 dc 0 dr 0 r3d 247` |
 | 城镇（split/single） | **待设备** | unattended 到不了城镇（序章洞窟是 joined、无存档可导入）；覆盖数字按菜单与标题外推 |
 | 战斗（battle 布局） | **待设备** | 同上；合成器的 backdrop/battle band 分支已有自检（`backdrop3d 0/0`） |
 | 真机 fps（B5-2） | **待设备** | 本机 SwiftShader 只有 36–60 Hz，量不到真机数 |
 
-`joined/field/effect/menu` 四类布局仍整体回退 recipe（`compose use: not composed, layout`），
-这是计划里写明的覆盖边界，不是待办；序章洞窟实测 `main ok 4556/4920`（合成器接得下，闸门按布局拒），
-若以后要接，先从 joined 的两半（上下各一屏、3D 图按半采样）开始。
+`joined` 已经接上（见上一节的 2026-11-01 段）；`field/effect/menu` 三类布局和淡入淡出的
+joined 帧仍整体回退 recipe（`compose use: not composed, layout|sides`），这是计划里写明的
+覆盖边界。真正省 CPU 的那一半（合成帧跳过 `Display::frame`）在 joined 上还差捕获的混合语义。
 
 ## 5. 不在这轮里
 `prep` 1963（3500 三角形 CPU 变换）是独立的一条线：更少的三角形/更省的顶点路径，

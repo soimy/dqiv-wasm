@@ -417,11 +417,13 @@ void Display::frame(NitroVideo& video,std::span<const std::uint32_t> three,bool 
     }
     captureOnly(video,three);
 }
-bool Display::captureDeferrable(NitroVideo& video) const {
+bool Display::captureDeferrable(NitroVideo& video,bool graphics) const {
     const unsigned cap=r32(video,0x04000064);
     if(!(cap&0x80000000u))return false;
     if((cap>>29)&3)return false;                        // source alone, not a blend
-    if(!(cap&(1u<<24)))return false;                    // and the 3D screen, not graphics
+    // The 3D screen or the engine's own composition, whichever the canvas already
+    // holds as a picture (stage B3/B4): `graphics` says the latter is on the GPU.
+    if(!(cap&(1u<<24))&&!graphics)return false;
     if(((cap>>20)&3)!=3)return false;                   // the whole screen
     if(((cap>>18)&3)!=0)return false;                   // at the start of the bank
     return video.lcdcBank((cap>>16)&3);
